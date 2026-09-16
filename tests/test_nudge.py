@@ -1,5 +1,7 @@
 """Tests for the propose-vs-act nudge in the agent loop."""
 
+import json
+
 from tests.test_agent import Chunk, Delta, ToolCallDelta, make_agent
 
 
@@ -441,7 +443,12 @@ def test_approval_auto_skips_prompts(tmp_path):
                             0,
                             id="c1",
                             name="write_file",
-                            arguments='{"path": "x.txt", "content": "hi"}',
+                            arguments=json.dumps(
+                                {
+                                    "path": str(tmp_path / "x.txt"),
+                                    "content": "hi",
+                                }
+                            ),
                         )
                     ]
                 )
@@ -467,7 +474,12 @@ def test_approval_default_asks(tmp_path):
                             0,
                             id="c1",
                             name="write_file",
-                            arguments='{"path": "x.txt", "content": "hi"}',
+                            arguments=json.dumps(
+                                {
+                                    "path": str(tmp_path / "x.txt"),
+                                    "content": "hi",
+                                }
+                            ),
                         )
                     ]
                 )
