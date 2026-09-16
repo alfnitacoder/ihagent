@@ -172,3 +172,28 @@ def test_fabricated_tool_response_is_stripped_and_nudged(tmp_path):
     assert len(nudges) == 1
     # the real tool ran afterwards
     assert any(m.get("role") == "tool" for m in agent.messages)
+
+
+def test_nudge_fires_on_recipe_mode(tmp_path):
+    """'To list the files... you can run:' announces without acting."""
+    (tmp_path / "f.txt").write_text("x\n")
+    turns = [
+        [Chunk(Delta(content="To list the files in your current directory, you can run the following command:\n```sh\nls\n```"))],
+        [
+            Chunk(
+                Delta(
+                    tool_calls=[
+                        ToolCallDelta(
+                            0, id="c1", name="list_dir",
+                            arguments='{"path": "%s"}' % tmp_path,
+                        )
+                    ]
+                )
+            )
+        ],
+        [Chunk(Delta(content="found f.txt"))],
+    ]
+    agent, ui = make_agent(tmp_path, turns)
+    final = agent.run("list my files in this folder")
+    assert final == "found f.txt"
+    assert len(ui.actions) == 1
