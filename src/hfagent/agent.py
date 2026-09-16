@@ -11,6 +11,7 @@ from __future__ import annotations
 import json
 import os
 import platform
+import re
 from typing import Any
 
 from openai import OpenAI
@@ -18,6 +19,54 @@ from openai import OpenAI
 from .config import Config
 from .prompts import SYSTEM_PROMPT
 from .tools import ToolRegistry
+
+
+TEXT_TOOL_CALL_RE = re.compile(
+    r"<tool_call>\s*(\{.*?\})\s*</tool_call>|<tool>\s*(\{.*?\})\s*</tool>",
+    re.DOTALL,
+)
+FENCED_JSON_RE = re.compile(r"```(?:json)?\s*(\{.*?\})\s*```", re.DOTALL)
+
+
+def parse_text_tool_calls(content: str) -> tuple[list[dict], str]:
+    """Extract tool calls embedded in plain text (e.g. '<tool_call>{...}</tool_call>').
+
+    Some servers (Ollama with GGUF templates, bare ReAct models) return the
+    Action as text instead of a structured tool_calls field. Handles
+    '<tool_call>{...}</tool_call>', '<tool>{...}</tool>' and fenced
+    '```json {"name": ..., "arguments": ...} ``` blocks. Returns
+    (tool_calls, remaining_content).
+    """
+    calls: list[dict] = []
+
+    def _capture(match: re.Match) -> str:
+        raw = match.group(1) or match.group(2) or match.group(0)
+        raw = raw.strip().removeprefix("```").removesuffix("```").strip()
+        if raw.startswith("json"):
+            raw = raw[4:].strip()
+        try:
+            payload = json.loads(raw)
+        except json.JSONDecodeError:
+            return ""
+        name = payload.get("name")
+        args = payload.get("arguments", payload.get("args", {}))
+        if isinstance(name, str) and name:
+            calls.append(
+                {
+                    "id": f"text_{len(calls)}",
+                    "type": "function",
+                    "function": {
+                        "name": name,
+                        "arguments": json.dumps(args if isinstance(args, dict) else {}),
+                    },
+                }
+            )
+        return ""  # strip the tag block from visible content
+
+    remaining = TEXT_TOOL_CALL_RE.sub(_capture, content)
+    if not calls:
+        remaining = FENCED_JSON_RE.sub(_capture, content)
+    return calls, remaining.strip()
 
 
 def system_prompt() -> str:
@@ -116,10 +165,25 @@ class Agent:
                     slot["arguments"] += tc.function.arguments
 
         content = "".join(content_parts)
+
+        ordered = [tool_calls[i] for i in sorted(tool_calls)]
+        if not ordered and content:
+            parsed, remaining = parse_text_tool_calls(content)
+            valid = [
+                {
+                    "id": c["id"],
+                    "name": c["function"]["name"],
+                    "arguments": c["function"]["arguments"],
+                }
+                for c in parsed
+                if self.registry.get(c["function"]["name"])
+            ]
+            if valid:
+                ordered = valid
+                content = remaining
         self.ui.on_assistant_done(content)
 
         message: dict[str, Any] = {"role": "assistant", "content": content or None}
-        ordered = [tool_calls[i] for i in sorted(tool_calls)]
         if ordered:
             message["tool_calls"] = [
                 {

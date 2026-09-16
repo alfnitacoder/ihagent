@@ -79,7 +79,23 @@ Skip them at your own risk with `--yolo` (or `HFAGENT_YOLO=1`).
 | `HFAGENT_MODEL` | `Qwen/Qwen2.5-Coder-32B-Instruct` | model id |
 | `HFAGENT_MAX_STEPS` | `25` | agent loop iteration cap |
 
-## Local models — run fully offline (Apple Silicon / MLX)
+## Local models — run fully offline
+
+### Ollama (recommended)
+
+hfagent auto-detects installed Ollama models — GGUFs pulled from the HF Hub
+(`hf.co/...`) work too:
+
+```bash
+.venv/bin/hfagent --ollama          # first installed model
+.venv/bin/hfagent --ollama <model>  # or name one explicitly
+```
+
+Some GGUF chat templates don't produce structured tool calls; hfagent parses
+them from text automatically (`<tool_call>{...}</tool_call>`, `<tool>...</tool>`,
+and fenced ```json blocks with `name`/`arguments`).
+
+### Apple Silicon / MLX
 
 Convert any model you downloaded to MLX 4-bit and serve it:
 
@@ -100,8 +116,9 @@ Tips for small local models:
 - hfagent defaults to `temperature 0.0` (greedy) — small models emit far more
   reliable tool calls that way; raise it with `--temperature` if you want variety.
 - Tiny models (0.5B) need terse tool descriptions; they skip tools when the
-  prompt is too wordy. Any OpenAI-compatible server works: Ollama
-  (`--base-url http://localhost:11434/v1`), vLLM, llama.cpp.
+  prompt is too wordy. A 7B-class model (e.g. Qwen2.5-Coder-7B) is the practical
+  minimum for reliable agent loops. Any OpenAI-compatible server also works via
+  `--base-url`: vLLM, llama.cpp, mlx_lm.server.
 
 ## Roadmap
 
