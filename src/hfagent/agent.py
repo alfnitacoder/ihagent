@@ -29,6 +29,15 @@ PROPOSE_PATTERN = re.compile(
     re.IGNORECASE,
 )
 
+FABRICATED_RESULT_RE = re.compile(
+    r"<tool_response>.*?(?:</tool_response>|$)", re.DOTALL
+)
+
+FABRICATION_NUDGE = (
+    "Do not write tool_response blocks or invent command output. Call the "
+    "tool now and report only its real result."
+)
+
 NUDGE_MESSAGE = (
     "Do not propose commands or ask permission. Call the appropriate tool now "
     "and report only the real output. Never invent results."
@@ -149,11 +158,28 @@ class Agent:
                     tool_used = True
                     continue
                 content = message.get("content") or ""
-                if not nudged and not tool_used and PROPOSE_PATTERN.search(content):
-                    # Model is proposing commands instead of acting; bounce
-                    # it back once so it uses its tools for real.
+                fabricated = "<tool_response" in content
+                proposing = not tool_used and PROPOSE_PATTERN.search(content)
+                if not nudged and (fabricated or proposing):
+                    # Model faked a result or announced instead of acting:
+                    # strip the fiction and bounce it back to its tools.
                     nudged = True
-                    self.messages.append({"role": "user", "content": NUDGE_MESSAGE})
+                    if fabricated:
+                        cleaned = FABRICATED_RESULT_RE.sub("", content).strip()
+                        message["content"] = cleaned or None
+                    self.ui.on_status(
+                        "model faked a tool result - nudging it to run tools"
+                        if fabricated
+                        else "model announced without acting - nudging it"
+                    )
+                    self.messages.append(
+                        {
+                            "role": "user",
+                            "content": FABRICATION_NUDGE
+                            if fabricated
+                            else NUDGE_MESSAGE,
+                        }
+                    )
                     continue
                 return content
         except KeyboardInterrupt:

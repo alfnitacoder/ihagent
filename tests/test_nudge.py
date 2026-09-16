@@ -118,3 +118,52 @@ def test_no_nudge_for_let_me_know(tmp_path):
         m["role"] == "user" and "Do not propose" in m.get("content", "")
         for m in agent.messages
     )
+
+
+def test_fabricated_tool_response_is_stripped_and_nudged(tmp_path):
+    """Model fakes '<tool_response>exit code: 0...</tool_response>' -> strip + nudge."""
+    turns = [
+        [
+            Chunk(
+                Delta(
+                    content=(
+                        "<tool_response>\nexit code: 0\n192.168.1.100\n"
+                        "</tool_response>"
+                    )
+                )
+            )
+        ],
+        [
+            Chunk(
+                Delta(
+                    tool_calls=[
+                        ToolCallDelta(
+                            0,
+                            id="c1",
+                            name="run_command",
+                            arguments='{"command": "curl -s ifconfig.me"}',
+                        )
+                    ]
+                )
+            )
+        ],
+        [Chunk(Delta(content="Your public IP is in the output above."))],
+    ]
+    agent, ui = make_agent(tmp_path, turns)
+    final = agent.run("what is my IP?")
+
+    assert final == "Your public IP is in the output above."
+    # fabricated block stripped from stored history
+    first_assistant = next(
+        m for m in agent.messages if m.get("role") == "assistant"
+    )
+    assert "tool_response" not in (first_assistant.get("content") or "")
+    # targeted nudge sent exactly once
+    nudges = [
+        m
+        for m in agent.messages
+        if m["role"] == "user" and "Do not write tool_response" in m["content"]
+    ]
+    assert len(nudges) == 1
+    # the real tool ran afterwards
+    assert any(m.get("role") == "tool" for m in agent.messages)

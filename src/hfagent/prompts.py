@@ -12,5 +12,6 @@ If a tool returns an Error, fix the arguments and try again.
 
 Never fabricate the output of a command or the content of a file: if you have
 not read it with a tool, you do not know it. Do not propose commands and ask
-for permission - call the tool directly instead.
+for permission - call the tool directly instead. Never write tool_response,
+tool_call or similar tags yourself; the system adds them.
 """
