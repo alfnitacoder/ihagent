@@ -68,6 +68,7 @@ One-shot prompt from any project directory:
 | `write_file` | create/overwrite a file | **y/N + diff** |
 | `edit_file` | replace exact text in a file | **y/N + diff** |
 | `run_command` | shell command (build, tests, git) | **y/N** |
+| `ssh_run` | one command on an SSH host (aliases from ~/.ssh/config) | **y/N** |
 
 Approval prompts protect against unintended writes and command execution.
 Skip them at your own risk with `--yolo` (or `HFAGENT_YOLO=1`).
@@ -132,6 +133,19 @@ Tips for small local models:
   prompt is too wordy. A 7B-class model (e.g. Qwen2.5-Coder-7B) is the practical
   minimum for reliable agent loops. Any OpenAI-compatible server also works via
   `--base-url`: vLLM, llama.cpp, mlx_lm.server.
+
+## Remote hosts (SSH)
+
+`ssh_run` executes single commands on hosts defined in `~/.ssh/config`:
+
+```
+❯ check disk space on wantok20
+→ action: ssh_run  $ ssh wantok20 'df -h'
+```
+
+It is non-interactive by design (one command per call, `BatchMode=yes`,
+`ConnectTimeout=10`) — interactive sessions would hang the agent. Keep your
+keys in `ssh-agent` if they have passphrases.
 
 ## Sessions
 
