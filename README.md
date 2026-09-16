@@ -53,6 +53,8 @@ One-shot prompt from any project directory:
 | `/help` | show commands |
 | `/tools` | list registered tools |
 | `/model <id>` | switch model, e.g. `Qwen/Qwen3-32B` |
+| `/sessions` | list saved sessions |
+| `/resume [name]` | load a saved session |
 | `/clear` | reset the conversation |
 | `/exit` | quit |
 
@@ -63,7 +65,8 @@ One-shot prompt from any project directory:
 | `list_dir` | list a directory | — |
 | `read_file` | read a text file | — |
 | `grep` | regex search across files | — |
-| `write_file` | create/overwrite a file | **y/N** |
+| `write_file` | create/overwrite a file | **y/N + diff** |
+| `edit_file` | replace exact text in a file | **y/N + diff** |
 | `run_command` | shell command (build, tests, git) | **y/N** |
 
 Approval prompts protect against unintended writes and command execution.
@@ -120,8 +123,18 @@ Tips for small local models:
   minimum for reliable agent loops. Any OpenAI-compatible server also works via
   `--base-url`: vLLM, llama.cpp, mlx_lm.server.
 
+## Sessions
+
+Every turn auto-saves to `~/.hfagent/sessions/<project>/`. Resume where you
+left off:
+
+```bash
+.venv/bin/hfagent --ollama --resume       # continue the most recent session
+```
+
+or interactively with `/sessions` and `/resume <name>`.
+
 ## Roadmap
 
-- **v0.2** — markdown streaming renderer, session save/resume, per-tool config
-- **v0.3** — opencode-style TUI (panes, diff preview before approve)
+- **v0.3** — opencode-style TUI (panes, markdown streaming), LSP-ish project context
 - **v0.4** — sub-agents, smolagents interop, benchmark hooks for the course challenge

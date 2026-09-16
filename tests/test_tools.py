@@ -7,7 +7,9 @@ def test_specs_are_valid_function_specs():
     registry = default_registry()
     specs = registry.specs()
     names = {spec["function"]["name"] for spec in specs}
-    assert names == {"list_dir", "read_file", "write_file", "grep", "run_command"}
+    assert names == {
+        "list_dir", "read_file", "write_file", "edit_file", "grep", "run_command"
+    }
     for spec in specs:
         assert spec["type"] == "function"
         assert spec["function"]["parameters"]["type"] == "object"

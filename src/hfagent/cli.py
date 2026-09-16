@@ -7,15 +7,18 @@ import sys
 
 from .agent import Agent
 from .config import DEFAULT_MODEL, Config
+from .sessions import list_sessions, load_session, save_session
 from .tools import default_registry
 from .ui.console import ConsoleUI
 
 HELP = """\
-/help           show this help
-/tools          list available tools
-/model <id>     switch model (e.g. Qwen/Qwen3-32B)
-/clear          reset the conversation
-/exit, /quit    leave the agent
+/help             show this help
+/tools            list available tools
+/model <id>       switch model (e.g. Qwen/Qwen3-32B)
+/sessions         list saved sessions
+/resume [name]    load a saved session ('last' if no name given)
+/clear            reset the conversation
+/exit, /quit      leave the agent
 """
 
 
@@ -38,6 +41,14 @@ def build_parser() -> argparse.ArgumentParser:
         "--local",
         action="store_true",
         help="use a local mlx_lm.server (default http://127.0.0.1:1234/v1)",
+    )
+    parser.add_argument(
+        "--resume",
+        nargs="?",
+        const="last",
+        default=None,
+        metavar="NAME",
+        help="continue a saved session (default: the most recent one)",
     )
     parser.add_argument(
         "--ollama",
@@ -102,6 +113,12 @@ def repl(agent: Agent, ui: ConsoleUI) -> None:
             elif command == "/clear":
                 agent.reset()
                 ui.on_status("conversation cleared")
+            elif command == "/sessions":
+                for i, s in enumerate(list_sessions()):
+                    print(f"{s['name']}  [{s['model'].split('/')[-1]}]  {s['preview']}")
+            elif command == "/resume":
+                name = rest[0] if rest else "last"
+                handle_resume(agent, ui, name)
             elif command == "/model":
                 if rest:
                     agent.config.model = rest[0]
@@ -111,8 +128,18 @@ def repl(agent: Agent, ui: ConsoleUI) -> None:
             continue
         try:
             agent.run(user_input)
+            save_session(agent.messages, agent.config.model)
         except Exception as exc:
             ui.on_error(f"{type(exc).__name__}: {exc}")
+
+
+def handle_resume(agent: Agent, ui: ConsoleUI, name: str) -> None:
+    messages = load_session(name)
+    if not messages:
+        ui.on_error(f"session not found: {name}")
+        return
+    agent.set_messages(messages)
+    ui.on_status(f"resumed session: {name} ({len(messages)} messages)")
 
 
 def main(argv: list[str] | None = None) -> None:
@@ -123,7 +150,10 @@ def main(argv: list[str] | None = None) -> None:
         print(__version__)
         return
     agent, ui = make_agent(args)
+    if args.resume:
+        handle_resume(agent, ui, args.resume)
     if args.prompt:
         agent.run(args.prompt)
+        save_session(agent.messages, agent.config.model)
         return
     repl(agent, ui)

@@ -1,7 +1,8 @@
-"""Filesystem tools: list, read, write, grep."""
+"""Filesystem tools: list, read, write, edit, grep."""
 
 from __future__ import annotations
 
+import difflib
 import re
 from pathlib import Path
 
@@ -14,6 +15,24 @@ SKIP_DIRS = {
 MAX_ENTRIES = 500
 MAX_MATCHES = 80
 MAX_FILE_CHARS = 40_000
+MAX_DIFF_LINES = 60
+
+
+def unified_diff(old: str, new: str, path: str) -> str:
+    """Compact unified diff, truncated for display."""
+    lines = list(
+        difflib.unified_diff(
+            old.splitlines(keepends=True),
+            new.splitlines(keepends=True),
+            fromfile=f"a/{path}",
+            tofile=f"b/{path}",
+            n=2,
+        )
+    )
+    text = "".join(lines)
+    if len(lines) > MAX_DIFF_LINES:
+        text = "".join(lines[:MAX_DIFF_LINES]) + f"... [+{len(lines) - MAX_DIFF_LINES} more lines]"
+    return text if text else "(no changes)"
 
 
 class ListDir(Tool):
@@ -21,9 +40,7 @@ class ListDir(Tool):
     description = "List a directory's entries (directories first)."
     parameters = {
         "type": "object",
-        "properties": {
-            "path": {"type": "string"}
-        },
+        "properties": {"path": {"type": "string"}},
     }
 
     def run(self, path: str = ".") -> str:
@@ -51,9 +68,7 @@ class ReadFile(Tool):
     description = "Read a text file and return its content."
     parameters = {
         "type": "object",
-        "properties": {
-            "path": {"type": "string"}
-        },
+        "properties": {"path": {"type": "string"}},
         "required": ["path"],
     }
 
@@ -78,6 +93,18 @@ class WriteFile(Tool):
     }
     needs_approval = True
 
+    def preview(self, path: str, content: str) -> str:
+        target = Path(path).expanduser()
+        if target.exists():
+            try:
+                old = target.read_text(encoding="utf-8", errors="replace")
+            except OSError:
+                return f"(overwrite) {target}"
+            return unified_diff(old, content, str(target))
+        head = "\n".join(content.splitlines()[:30])
+        more = "\n... [+more]" if len(content.splitlines()) > 30 else ""
+        return f"(new file) {target}\n{head}{more}"
+
     def run(self, path: str, content: str) -> str:
         target = Path(path).expanduser()
         target.parent.mkdir(parents=True, exist_ok=True)
@@ -85,15 +112,59 @@ class WriteFile(Tool):
         return f"wrote {len(content)} chars to {target}"
 
 
+class EditFile(Tool):
+    name = "edit_file"
+    description = (
+        "Replace an exact string in a file with new text. old_text must match "
+        "exactly once. Requires user approval."
+    )
+    parameters = {
+        "type": "object",
+        "properties": {
+            "path": {"type": "string"},
+            "old_text": {"type": "string", "description": "Exact text to find."},
+            "new_text": {"type": "string", "description": "Replacement text."},
+        },
+        "required": ["path", "old_text", "new_text"],
+    }
+    needs_approval = True
+
+    def _load(self, path: str) -> tuple[Path, str] | tuple[None, str]:
+        target = Path(path).expanduser()
+        if not target.exists():
+            return None, f"Error: file not found: {target}"
+        try:
+            return target, target.read_text(encoding="utf-8", errors="replace")
+        except OSError as exc:
+            return None, f"Error: {type(exc).__name__}: {exc}"
+
+    def preview(self, path: str, old_text: str, new_text: str) -> str:
+        target, text = self._load(path)
+        if target is None:
+            return text
+        if text.count(old_text) != 1:
+            return f"(cannot preview: old_text matches {text.count(old_text)} times)"
+        return unified_diff(text, text.replace(old_text, new_text, 1), str(target))
+
+    def run(self, path: str, old_text: str, new_text: str) -> str:
+        target, text = self._load(path)
+        if target is None:
+            return text
+        count = text.count(old_text)
+        if count == 0:
+            return "Error: old_text not found. Read the file and copy the exact text."
+        if count > 1:
+            return f"Error: old_text appears {count} times; include more surrounding context to make it unique."
+        target.write_text(text.replace(old_text, new_text, 1), encoding="utf-8")
+        return f"edited {target} ({len(old_text)} -> {len(new_text)} chars)"
+
+
 class Grep(Tool):
     name = "grep"
     description = "Search files with a regex; returns file:line: text matches."
     parameters = {
         "type": "object",
-        "properties": {
-            "pattern": {"type": "string"},
-            "path": {"type": "string"},
-        },
+        "properties": {"pattern": {"type": "string"}, "path": {"type": "string"}},
         "required": ["pattern"],
     }
 

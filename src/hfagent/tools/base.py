@@ -16,6 +16,10 @@ class Tool:
     def run(self, **kwargs: Any) -> str:
         raise NotImplementedError
 
+    def preview(self, **kwargs: Any) -> str | None:
+        """Human-readable preview shown at approval time; None -> show args."""
+        return None
+
     def spec(self) -> dict[str, Any]:
         return {
             "type": "function",

@@ -89,7 +89,9 @@ class AgentUI:
     def on_observation(self, tool_name: str, result: str) -> None: ...
     def on_error(self, message: str) -> None: ...
 
-    def approve(self, tool_name: str, arguments: dict) -> bool:
+    def approve(
+        self, tool_name: str, arguments: dict, preview: str | None = None
+    ) -> bool:
         return False
 
 
@@ -109,6 +111,14 @@ class Agent:
         ]
 
     # ------------------------------------------------------------------ state
+
+    def set_messages(self, history: list[dict[str, Any]]) -> None:
+        """Replace conversation history, keeping the fresh system prompt."""
+        self.messages = [
+            m
+            for m in self.messages
+            if m.get("role") == "system"
+        ] + [m for m in history if m.get("role") != "system"]
 
     def reset(self) -> None:
         self.messages = [{"role": "system", "content": system_prompt()}]
@@ -238,7 +248,11 @@ class Agent:
     def _approved(self, tool, args: dict) -> bool:
         if self.config.auto_approve:
             return True
-        return self.ui.approve(tool.name, args)
+        try:
+            preview = tool.preview(**args)
+        except Exception:
+            preview = None
+        return self.ui.approve(tool.name, args, preview)
 
     def _truncate(self, text: str) -> str:
         limit = self.config.max_tool_result_chars

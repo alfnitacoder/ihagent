@@ -76,7 +76,7 @@ class Recorder(AgentUI):
     def on_error(self, message):
         self.errors.append(message)
 
-    def approve(self, name, args):
+    def approve(self, name, args, preview=None):
         self.approvals.append((name, args))
         return self.allow
 

@@ -22,6 +22,9 @@ class RunCommand(Tool):
     }
     needs_approval = True
 
+    def preview(self, command: str, timeout: int = 60) -> str:
+        return f"$ {command}\n(timeout: {timeout}s)"
+
     def run(self, command: str, timeout: int = 60) -> str:
         try:
             proc = subprocess.run(

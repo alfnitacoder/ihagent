@@ -69,10 +69,10 @@ class ConsoleUI(AgentUI):
     def on_error(self, message: str) -> None:
         self.console.print(f"error: {message}", style="bold red")
 
-    def approve(self, tool_name: str, arguments: dict) -> bool:
+    def approve(self, tool_name: str, arguments: dict, preview: str | None = None) -> bool:
         self.console.print(
             Panel(
-                _dump(arguments),
+                preview if preview is not None else _dump(arguments),
                 title=f"approval needed: {tool_name}",
                 title_align="left",
                 border_style="yellow",
