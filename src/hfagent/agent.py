@@ -21,6 +21,17 @@ from .prompts import SYSTEM_PROMPT
 from .tools import ToolRegistry
 
 
+PROPOSE_PATTERN = re.compile(
+    r"```(?:sh|bash|shell|console|terminal)\b"
+    r"|(?:would you like me to|shall i|want me to|should i)\s+(?:run|execute|list|check|show)",
+    re.IGNORECASE,
+)
+
+NUDGE_MESSAGE = (
+    "Do not propose commands or ask permission. Call the appropriate tool now "
+    "and report only the real output. Never invent results."
+)
+
 TEXT_TOOL_CALL_RE = re.compile(
     r"<tool_call>\s*(\{.*?\})\s*</tool_call>|<tool>\s*(\{.*?\})\s*</tool>",
     re.DOTALL,
@@ -127,11 +138,20 @@ class Agent:
 
     def run(self, user_input: str) -> str:
         self.messages.append({"role": "user", "content": user_input})
+        nudged = False
         try:
             for _step in range(self.config.max_steps):
                 message = self._step()
-                if not message.get("tool_calls"):
-                    return message.get("content") or ""
+                if message.get("tool_calls"):
+                    continue
+                content = message.get("content") or ""
+                if not nudged and PROPOSE_PATTERN.search(content):
+                    # Model is proposing commands instead of acting; bounce
+                    # it back once so it uses its tools for real.
+                    nudged = True
+                    self.messages.append({"role": "user", "content": NUDGE_MESSAGE})
+                    continue
+                return content
         except KeyboardInterrupt:
             self._patch_interrupted()
             self.ui.on_error("interrupted by user")
