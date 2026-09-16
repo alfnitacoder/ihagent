@@ -488,7 +488,7 @@ class Agent:
         return result
 
     def _approved(self, tool, args: dict) -> bool:
-        if self.config.auto_approve:
+        if self.config.approval == "auto":
             return True
         try:
             preview = tool.preview(**args)

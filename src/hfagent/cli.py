@@ -16,6 +16,7 @@ HELP = """\
 /help             show this help
 /tools            list available tools
 /models           list installed Ollama models (--ollama only)
+/approval [mode]  switch approval mode: auto or default
 /memory           show what the agent remembers long-term
 /forget           wipe long-term memory
 /model <id>       switch model (e.g. Qwen/Qwen3-32B)
@@ -63,7 +64,14 @@ def build_parser() -> argparse.ArgumentParser:
         help="use a local Ollama model (auto-detects if no name given)",
     )
     parser.add_argument(
-        "-y", "--yolo", action="store_true", help="auto-approve write/execute tools"
+        "--approval",
+        choices=("auto", "default"),
+        default=None,
+        help="approval mode: 'auto' runs gated tools without asking; "
+        "'default' prompts y/N (env: HFAGENT_APPROVAL)",
+    )
+    parser.add_argument(
+        "-y", "--yolo", action="store_true", help="shorthand for --approval auto"
     )
     parser.add_argument("--version", action="store_true", help="print version and exit")
     return parser
@@ -75,7 +83,7 @@ def make_agent(args: argparse.Namespace) -> tuple[Agent, ConsoleUI]:
             model=args.model,
             base_url=args.base_url,
             max_steps=args.max_steps,
-            auto_approve=args.yolo,
+            approval="auto" if args.yolo else args.approval,
             temperature=args.temperature,
             local=args.local,
             ollama=args.ollama,
@@ -115,6 +123,15 @@ def repl(agent: Agent, ui: ConsoleUI) -> None:
                 break
             elif command == "/help":
                 print(HELP)
+            elif command == "/approval":
+                if rest and rest[0] in ("auto", "default"):
+                    agent.config.approval = rest[0]
+                    ui.on_status(f"approval mode: {rest[0]}")
+                else:
+                    ui.on_status(
+                        f"approval mode: {agent.config.approval} "
+                        "(usage: /approval auto|default)"
+                    )
             elif command == "/memory":
                 memory = load_memory().strip()
                 print(memory if memory else "(memory is empty)")

@@ -429,3 +429,54 @@ def test_none_content_history_is_sanitized_for_ollama(tmp_path):
         and not m.get("tool_calls")
     ]
     assert not bad
+
+
+def test_approval_auto_skips_prompts(tmp_path):
+    turns = [
+        [
+            Chunk(
+                Delta(
+                    tool_calls=[
+                        ToolCallDelta(
+                            0,
+                            id="c1",
+                            name="write_file",
+                            arguments='{"path": "x.txt", "content": "hi"}',
+                        )
+                    ]
+                )
+            )
+        ],
+        [Chunk(Delta(content="written"))],
+    ]
+    agent, ui = make_agent(tmp_path, turns)
+    agent.config.approval = "auto"
+    target = tmp_path / "x.txt"
+    agent.run(f"write {target}")
+    assert ui.approvals == []  # no prompt in auto mode
+    assert target.exists()
+
+
+def test_approval_default_asks(tmp_path):
+    turns = [
+        [
+            Chunk(
+                Delta(
+                    tool_calls=[
+                        ToolCallDelta(
+                            0,
+                            id="c1",
+                            name="write_file",
+                            arguments='{"path": "x.txt", "content": "hi"}',
+                        )
+                    ]
+                )
+            )
+        ],
+        [Chunk(Delta(content="written"))],
+    ]
+    agent, ui = make_agent(tmp_path, turns)
+    agent.config.approval = "default"
+    ui.allow = True
+    agent.run(f"write {tmp_path / 'x.txt'}")
+    assert len(ui.approvals) == 1

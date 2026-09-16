@@ -65,7 +65,7 @@ class Config:
     model: str = DEFAULT_MODEL
     max_steps: int = 25
     max_tool_result_chars: int = 40_000
-    auto_approve: bool = False
+    approval: str = "default"  # 'default' (ask) or 'auto' (no prompts)
     temperature: float = 0.0
 
     @classmethod
@@ -74,10 +74,10 @@ class Config:
         model: str | None = None,
         base_url: str | None = None,
         max_steps: int | None = None,
-        auto_approve: bool = False,
         temperature: float | None = None,
         local: bool = False,
         ollama: str | None = None,
+        approval: str | None = None,
     ) -> "Config":
         if ollama is not None:
             base_url = OLLAMA_BASE_URL
@@ -93,6 +93,8 @@ class Config:
             base_url=base_url or os.environ.get("HF_BASE_URL", DEFAULT_BASE_URL),
             model=model or os.environ.get("HFAGENT_MODEL", DEFAULT_MODEL),
             max_steps=max_steps or int(os.environ.get("HFAGENT_MAX_STEPS", "25")),
-            auto_approve=auto_approve or os.environ.get("HFAGENT_YOLO", "") == "1",
+            approval=approval
+            or os.environ.get("HFAGENT_APPROVAL", "")
+            or ("auto" if os.environ.get("HFAGENT_YOLO", "") == "1" else "default"),
             temperature=temperature or 0.0,
         )
