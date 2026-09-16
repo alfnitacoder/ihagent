@@ -428,6 +428,11 @@ class Agent:
         if tool.needs_approval and not self._approved(tool, args):
             return "User declined this action. Propose an alternative or ask why."
 
+        if name == "ssh_run" and isinstance(args.get("host"), str):
+            self.ui.on_status(
+                f"remote task on {args['host']}: executing, waiting for "
+                "completion..."
+            )
         try:
             result = tool.run(**args)
         except Exception as exc:  # surfaced to the model as an Observation

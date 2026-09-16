@@ -239,3 +239,41 @@ def test_no_nudge_for_long_explanation_starting_with_lets(tmp_path):
         m["role"] == "user" and "Do not propose" in m.get("content", "")
         for m in agent.messages
     )
+
+
+def test_remote_task_status_line(tmp_path):
+    from tests.test_agent import make_agent as _mk
+
+    turns = [
+        [
+            Chunk(
+                Delta(
+                    tool_calls=[
+                        ToolCallDelta(
+                            0,
+                            id="c1",
+                            name="ssh_run",
+                            arguments='{"host": "kali219", "command": "ls /root"}',
+                        )
+                    ]
+                )
+            )
+        ],
+        [Chunk(Delta(content="listed /root on kali219"))],
+    ]
+    agent, ui = make_agent(tmp_path, turns)
+    ui.statuses = []
+
+    def capture_status(text):
+        ui.statuses.append(text)
+
+    ui.on_status = capture_status
+    agent.run("list /root on kali219")
+    assert any("remote task on kali219" in s for s in ui.statuses)
+
+
+def test_prompt_has_persistence_rule():
+    from hfagent.prompts import SYSTEM_PROMPT
+
+    assert "Never abandon a task after a failure" in SYSTEM_PROMPT
+    assert "until the" in SYSTEM_PROMPT and "complete" in SYSTEM_PROMPT
