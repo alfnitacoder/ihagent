@@ -11,7 +11,10 @@ MAX_OUTPUT_CHARS = 20_000
 
 class RunCommand(Tool):
     name = "run_command"
-    description = "Run a shell command; returns exit code and output. Requires user approval."
+    description = (
+        "Run a shell command; returns exit code and output. Requires user "
+        "approval. Prefer quiet flags for noisy tools (e.g. curl -s, wget -q)."
+    )
     parameters = {
         "type": "object",
         "properties": {

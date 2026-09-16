@@ -58,3 +58,63 @@ def test_nudge_only_once(tmp_path):
     agent.run("do it")
     nudges = [m for m in agent.messages if m["role"] == "user" and "Do not propose" in m["content"]]
     assert len(nudges) == 1
+
+
+def test_nudge_fires_on_announced_intent(tmp_path):
+    """'I'll list the network interfaces...' with no action -> nudge."""
+    (tmp_path / "f.txt").write_text("x\n")
+    turns = [
+        [Chunk(Delta(content="I'll list the network interfaces and then extract the IP address."))],
+        [
+            Chunk(
+                Delta(
+                    tool_calls=[
+                        ToolCallDelta(
+                            0, id="c1", name="list_dir",
+                            arguments='{"path": "%s"}' % tmp_path,
+                        )
+                    ]
+                )
+            )
+        ],
+        [Chunk(Delta(content="done: found f.txt"))],
+    ]
+    agent, ui = make_agent(tmp_path, turns)
+    final = agent.run("what is my wifi IP?")
+    assert final == "done: found f.txt"
+    assert any(
+        m["role"] == "user" and "Do not propose" in m["content"]
+        for m in agent.messages
+    )
+
+
+def test_no_nudge_after_tools_were_used(tmp_path):
+    """'Let me show you...' after real tool use is a legitimate summary."""
+    turns = [
+        [
+            Chunk(
+                Delta(
+                    tool_calls=[
+                        ToolCallDelta(0, id="c1", name="list_dir", arguments="{}")
+                    ]
+                )
+            )
+        ],
+        [Chunk(Delta(content="Listed. Let me show you the summary: it works."))],
+    ]
+    agent, ui = make_agent(tmp_path, turns)
+    agent.run("list files")
+    assert not any(
+        m["role"] == "user" and "Do not propose" in m.get("content", "")
+        for m in agent.messages
+    )
+
+
+def test_no_nudge_for_let_me_know(tmp_path):
+    turns = [[Chunk(Delta(content="Done! Let me know if you need anything else."))]]
+    agent, ui = make_agent(tmp_path, turns)
+    agent.run("ok")
+    assert not any(
+        m["role"] == "user" and "Do not propose" in m.get("content", "")
+        for m in agent.messages
+    )

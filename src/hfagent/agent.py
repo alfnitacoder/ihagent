@@ -23,7 +23,9 @@ from .tools import ToolRegistry
 
 PROPOSE_PATTERN = re.compile(
     r"```(?:sh|bash|shell|console|terminal)\b"
-    r"|(?:would you like me to|shall i|want me to|should i)\s+(?:run|execute|list|check|show)",
+    r"|(?:would you like me to|shall i|want me to|should i)\s+(?:run|execute|list|check|show)"
+    r"|(?:^|\n|\.\s)(?:i'll|i will|let's|let me)\s+[a-z]*\s*"
+    r"(?:run|execute|list|check|fetch|find|get|extract|create|edit|write|read|search|try)\b",
     re.IGNORECASE,
 )
 
@@ -139,13 +141,15 @@ class Agent:
     def run(self, user_input: str) -> str:
         self.messages.append({"role": "user", "content": user_input})
         nudged = False
+        tool_used = False
         try:
             for _step in range(self.config.max_steps):
                 message = self._step()
                 if message.get("tool_calls"):
+                    tool_used = True
                     continue
                 content = message.get("content") or ""
-                if not nudged and PROPOSE_PATTERN.search(content):
+                if not nudged and not tool_used and PROPOSE_PATTERN.search(content):
                     # Model is proposing commands instead of acting; bounce
                     # it back once so it uses its tools for real.
                     nudged = True
