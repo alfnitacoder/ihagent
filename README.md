@@ -98,7 +98,18 @@ hfagent auto-detects installed Ollama models (newest first) — GGUFs pulled
 from the HF Hub (`hf.co/...`, e.g. 'abliterated' variants) also work, but
 their converted templates tend to fabricate results instead of calling
 tools; hfagent strips faked `<tool_response>` blocks and nudges the model
-back to its tools automatically:
+back to its tools automatically.
+
+Switch models any time — names resolve by exact or unique-substring match:
+
+```bash
+.venv/bin/hfagent --ollama qwen2.5-coder:7b      # official
+.venv/bin/hfagent --ollama qwen2.5-coder-abliterated
+```
+
+Inside the REPL, `/models` lists what is installed (→ marks the active one),
+`/model <id>` switches mid-session. Pin a default with
+`HFAGENT_LOCAL_MODEL` in your shell profile.
 
 ```bash
 .venv/bin/hfagent --ollama          # first installed model
