@@ -32,7 +32,7 @@ PROPOSE_PATTERN = re.compile(
     r"```(?:sh|bash|shell|console|terminal)\b"
     r"|(?:would you like me to|shall i|want me to|should i)\s+(?:run|execute|list|check|show)"
     r"|(?:^|\n|[.,;:]\s)(?:i'll|i will|let's|let me)\s+[a-z]*\s*"
-    r"(?:run|execute|list|check|fetch|find|get|extract|create|edit|write|read|search|try|install|configure|update|upgrade|remove|uninstall|download|clone|scan|start|stop|restart|deploy|build|compile|test|probe|sniff|capture|enumerate|analyze|dump|query|connect|ping|generate|apply|fix|patch|add|clean)\b"
+    r"(?:run|execute|list|check|fetch|find|get|extract|create|edit|write|read|search|try|install|configure|update|upgrade|remove|uninstall|download|clone|scan|stop|restart|deploy|build|compile|test|probe|sniff|capture|enumerate|analyze|dump|query|connect|ping|generate|apply|fix|patch|add|clean)\b"
     r"|you can (?:run|use) (?:the|this|it|`)"
     r"|here(?:'s| is) (?:the|a) (?:command|file|diff)",
     re.IGNORECASE,
