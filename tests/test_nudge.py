@@ -334,3 +334,52 @@ def test_midtask_announcement_gets_nudged_then_acts(tmp_path):
     assert final.startswith("DNS does not resolve")
     assert len(ui.actions) == 2  # nmap + nslookup both ran
     assert any("nudging" in s for s in ui.statuses)
+
+
+def test_second_proposal_nudge_quotes_announcement(tmp_path):
+    """Regression: repeated 'I will check...' announcements must escalate."""
+    announce = "I will check if the wordlist exists on kali219."
+    turns = [
+        [Chunk(Delta(content=announce))],
+        [Chunk(Delta(content=announce))],  # identical stall after 1st nudge
+        [
+            Chunk(
+                Delta(
+                    tool_calls=[
+                        ToolCallDelta(
+                            0,
+                            id="c1",
+                            name="ssh_run",
+                            arguments='{"host": "kali219", "command": "ls /usr/share/wordlists/"}',
+                        )
+                    ]
+                )
+            )
+        ],
+        [Chunk(Delta(content="wordlists directory listed"))],
+    ]
+    agent, ui = make_agent(tmp_path, turns)
+    ui.statuses = []
+    ui.on_status = lambda text: ui.statuses.append(text)
+    final = agent.run("check the wordlist")
+
+    assert final == "wordlists directory listed"
+    escalated = [
+        m for m in agent.messages
+        if m["role"] == "user" and "You announced:" in m["content"]
+    ]
+    assert len(escalated) == 1
+    assert announce[:40] in escalated[0]["content"]
+
+
+def test_proposal_rollback_gives_tip(tmp_path):
+    turns = [
+        [Chunk(Delta(content="I will check the wordlist."))] for _ in range(4)
+    ]
+    agent, ui = make_agent(tmp_path, turns)
+    base_len = len(agent.messages)
+    final = agent.run("check the wordlist")
+
+    assert final == ""
+    assert len(agent.messages) == base_len
+    assert any("Tip:" in e for e in ui.errors)

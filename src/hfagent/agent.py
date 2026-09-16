@@ -68,6 +68,15 @@ NUDGE_MESSAGE = (
     "then report only the real output."
 )
 
+PROPOSAL_NUDGE_ESCALATED = (
+    "You announced: \"{announcement}\"\n"
+    "Do not announce it again. Execute it now. Reply with ONLY the function "
+    "call, in exactly this JSON shape and nothing else:\n"
+    '{{"name": "ssh_run", "arguments": {{"host": "<host>", '
+    '"command": "<the exact command>"}}}}\n'
+    "Use run_command instead for local commands. No prose, no plan text."
+)
+
 AFFIRMATION_RE = re.compile(
     r"^\s*(?:yes|y|yeah|yep|ok|okay|sure|go|go ahead|do it|run it|please)\W*$",
     re.IGNORECASE,
@@ -309,18 +318,28 @@ class Agent:
                     continue
                 if proposing:
                     if nudges["proposal"] < 2:
+                        escalate = nudges["proposal"] >= 1
                         nudges["proposal"] += 1
                         self.ui.on_status(
                             "model announced without acting - nudging it"
                         )
                         self.messages.append(
-                            {"role": "user", "content": NUDGE_MESSAGE}
+                            {
+                                "role": "user",
+                                "content": PROPOSAL_NUDGE_ESCALATED.format(
+                                    announcement=content.strip()[:300]
+                                )
+                                if escalate
+                                else NUDGE_MESSAGE,
+                            }
                         )
                         continue
                     if not tool_used:
                         return roll_back(
-                            "model kept proposing commands without acting; "
-                            "rolled back this exchange"
+                            "model kept announcing steps without acting; "
+                            "rolled back this exchange. Tip: phrase it as a "
+                            "direct command, e.g. 'on kali219 run: "
+                            "ls /usr/share/wordlists'"
                         )
                     # mid-task: keep the completed work, hand the plan back
                     self.ui.on_status(
