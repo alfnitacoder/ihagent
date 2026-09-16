@@ -48,16 +48,21 @@ def test_no_nudge_for_normal_answers(tmp_path):
     )
 
 
-def test_nudge_only_once(tmp_path):
+def test_proposal_nudges_capped_at_two(tmp_path):
     turns = [
         [Chunk(Delta(content="```sh\nls\n```\nWant me to run it?"))],
         [Chunk(Delta(content="```sh\npwd\n```\nShall I run it?"))],
+        [Chunk(Delta(content="```sh\nwhoami\n```\nShould I run it?"))],
         [Chunk(Delta(content="done talking"))],
     ]
     agent, ui = make_agent(tmp_path, turns)
     agent.run("do it")
-    nudges = [m for m in agent.messages if m["role"] == "user" and "Do not propose" in m["content"]]
-    assert len(nudges) == 1
+    nudges = [
+        m
+        for m in agent.messages
+        if m["role"] == "user" and "Do not propose" in m["content"]
+    ]
+    assert len(nudges) == 2
 
 
 def test_nudge_fires_on_announced_intent(tmp_path):
@@ -162,7 +167,7 @@ def test_fabricated_tool_response_is_stripped_and_nudged(tmp_path):
     nudges = [
         m
         for m in agent.messages
-        if m["role"] == "user" and "Do not write tool_response" in m["content"]
+        if m["role"] == "user" and "Never write tool_response tags" in m["content"]
     ]
     assert len(nudges) == 1
     # the real tool ran afterwards

@@ -34,8 +34,9 @@ FABRICATED_RESULT_RE = re.compile(
 )
 
 FABRICATION_NUDGE = (
-    "Do not write tool_response blocks or invent command output. Call the "
-    "tool now and report only its real result."
+    "Never write tool_response tags or invent command output. If the real "
+    "result is already in the conversation above, summarize it in your own "
+    "words; otherwise call the tool and report only its real result."
 )
 
 NUDGE_MESSAGE = (
@@ -149,7 +150,7 @@ class Agent:
 
     def run(self, user_input: str) -> str:
         self.messages.append({"role": "user", "content": user_input})
-        nudged = False
+        nudges = {"fabrication": 0, "proposal": 0}
         tool_used = False
         try:
             for _step in range(self.config.max_steps):
@@ -158,27 +159,33 @@ class Agent:
                     tool_used = True
                     continue
                 content = message.get("content") or ""
+                # Fabrication must be detected on the RAW content, before
+                # stripping (the cleaned text never contains the tag).
                 fabricated = "<tool_response" in content
-                proposing = not tool_used and PROPOSE_PATTERN.search(content)
-                if not nudged and (fabricated or proposing):
-                    # Model faked a result or announced instead of acting:
-                    # strip the fiction and bounce it back to its tools.
-                    nudged = True
-                    if fabricated:
-                        cleaned = FABRICATED_RESULT_RE.sub("", content).strip()
-                        message["content"] = cleaned or None
+                if fabricated:
+                    # Always strip faked results. NOTE: Ollama rejects
+                    # assistant messages with null content, so use "".
+                    content = FABRICATED_RESULT_RE.sub("", content).strip()
+                    message["content"] = content
+                proposing = not tool_used and bool(
+                    PROPOSE_PATTERN.search(content)
+                )
+                if fabricated and nudges["fabrication"] < 2:
+                    nudges["fabrication"] += 1
                     self.ui.on_status(
                         "model faked a tool result - nudging it to run tools"
-                        if fabricated
-                        else "model announced without acting - nudging it"
                     )
                     self.messages.append(
-                        {
-                            "role": "user",
-                            "content": FABRICATION_NUDGE
-                            if fabricated
-                            else NUDGE_MESSAGE,
-                        }
+                        {"role": "user", "content": FABRICATION_NUDGE}
+                    )
+                    continue
+                if proposing and nudges["proposal"] < 2:
+                    nudges["proposal"] += 1
+                    self.ui.on_status(
+                        "model announced without acting - nudging it"
+                    )
+                    self.messages.append(
+                        {"role": "user", "content": NUDGE_MESSAGE}
                     )
                     continue
                 return content
