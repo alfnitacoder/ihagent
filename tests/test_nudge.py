@@ -197,3 +197,45 @@ def test_nudge_fires_on_recipe_mode(tmp_path):
     final = agent.run("list my files in this folder")
     assert final == "found f.txt"
     assert len(ui.actions) == 1
+
+
+def test_nudge_fires_on_lets_install(tmp_path):
+    """Regression: 'Let's install X on <host>' announced without acting."""
+    turns = [
+        [Chunk(Delta(content="Let's install `mitmproxy` on `kali219`."))],
+        [
+            Chunk(
+                Delta(
+                    tool_calls=[
+                        ToolCallDelta(
+                            0, id="c1", name="run_command",
+                            arguments='{"command": "apt install -y mitmproxy"}',
+                        )
+                    ]
+                )
+            )
+        ],
+        [Chunk(Delta(content="installed"))],
+    ]
+    agent, ui = make_agent(tmp_path, turns)
+    final = agent.run("run apt install mitmproxy")
+    assert final == "installed"
+    assert len(ui.actions) == 1
+
+
+def test_no_nudge_for_long_explanation_starting_with_lets(tmp_path):
+    body = (
+        "Let's start with the basics. DNS translates human-readable names "
+        + "into IP addresses through a hierarchy of servers. "
+        + "A recursive resolver asks the root servers, then the TLD servers, "
+        + "then the authoritative servers for the domain, and each layer "
+        + "caches results according to their TTL so future lookups are faster "
+        + "and cheaper for everyone involved in the lookup chain."
+    )
+    turns = [[Chunk(Delta(content=body))]]
+    agent, ui = make_agent(tmp_path, turns)
+    agent.run("explain DNS")
+    assert not any(
+        m["role"] == "user" and "Do not propose" in m.get("content", "")
+        for m in agent.messages
+    )
