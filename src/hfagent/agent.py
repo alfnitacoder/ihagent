@@ -9,6 +9,8 @@ Course mapping (Hugging Face AI Agents Course, Unit 1):
 from __future__ import annotations
 
 import json
+import os
+import platform
 from typing import Any
 
 from openai import OpenAI
@@ -16,6 +18,16 @@ from openai import OpenAI
 from .config import Config
 from .prompts import SYSTEM_PROMPT
 from .tools import ToolRegistry
+
+
+def system_prompt() -> str:
+    """System prompt with live environment context appended."""
+    home = os.path.expanduser("~")
+    env = (
+        f"Environment: {platform.system()} {platform.release()}, "
+        f"working directory: {os.getcwd()}, home directory: {home}."
+    )
+    return f"{env}\n\n{SYSTEM_PROMPT}"
 
 
 class AgentUI:
@@ -44,13 +56,13 @@ class Agent:
             max_retries=2,
         )
         self.messages: list[dict[str, Any]] = [
-            {"role": "system", "content": SYSTEM_PROMPT}
+            {"role": "system", "content": system_prompt()}
         ]
 
     # ------------------------------------------------------------------ state
 
     def reset(self) -> None:
-        self.messages = [{"role": "system", "content": SYSTEM_PROMPT}]
+        self.messages = [{"role": "system", "content": system_prompt()}]
 
     # ------------------------------------------------------------------- loop
 
