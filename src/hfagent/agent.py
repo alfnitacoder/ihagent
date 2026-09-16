@@ -89,7 +89,51 @@ def parse_text_tool_calls(content: str) -> tuple[list[dict], str]:
     remaining = TEXT_TOOL_CALL_RE.sub(_capture, content)
     if not calls:
         remaining = FENCED_JSON_RE.sub(_capture, content)
+    if not calls:
+        calls, remaining = _bare_json_calls(content)
     return calls, remaining.strip()
+
+
+def _bare_json_calls(content: str) -> tuple[list[dict], str]:
+    """Detect bare '{"name": ..., "arguments": ...}' objects in text.
+
+    Some models emit the tool-call JSON without any wrapper. Uses incremental
+    decoding so nested argument objects parse correctly, and removes only the
+    matched spans.
+    """
+    decoder = json.JSONDecoder()
+    calls: list[dict] = []
+    kept: list[str] = []
+    idx = 0
+    while True:
+        pos = content.find('{"name"', idx)
+        if pos == -1:
+            break
+        try:
+            payload, end = decoder.raw_decode(content, pos)
+        except json.JSONDecodeError:
+            idx = pos + 1
+            continue
+        if isinstance(payload, dict) and isinstance(payload.get("name"), str):
+            args = payload.get("arguments", payload.get("args", {}))
+            calls.append(
+                {
+                    "id": f"text_{len(calls)}",
+                    "type": "function",
+                    "function": {
+                        "name": payload["name"],
+                        "arguments": json.dumps(
+                            args if isinstance(args, dict) else {}
+                        ),
+                    },
+                }
+            )
+            kept.append(content[idx:pos])
+            idx = pos + end
+        else:
+            idx = pos + 1
+    kept.append(content[idx:])
+    return calls, "".join(kept)
 
 
 def system_prompt() -> str:
@@ -161,11 +205,17 @@ class Agent:
                 content = message.get("content") or ""
                 # Fabrication must be detected on the RAW content, before
                 # stripping (the cleaned text never contains the tag).
-                fabricated = "<tool_response" in content
+                fabricated = (
+                    "<tool_response" in content
+                    or "</tool_response" in content
+                )
                 if fabricated:
                     # Always strip faked results. NOTE: Ollama rejects
                     # assistant messages with null content, so use "".
-                    content = FABRICATED_RESULT_RE.sub("", content).strip()
+                    content = FABRICATED_RESULT_RE.sub("", content)
+                    # orphan tags from half-fabricated blocks
+                    content = re.sub(r"</?tool_response>?", "", content)
+                    content = content.strip()
                     message["content"] = content
                 proposing = not tool_used and bool(
                     PROPOSE_PATTERN.search(content)

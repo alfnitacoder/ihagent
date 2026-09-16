@@ -55,3 +55,20 @@ def test_fenced_non_tool_json_ignored():
         '```json\n{"config": true, "debug": false}\n```'
     )
     assert calls == []
+
+
+def test_bare_json_tool_call():
+    calls, rest = parse_text_tool_calls(
+        '{"name": "run_command", "arguments": {"command": "curl -s ifconfig.me", "timeout": 10}}'
+    )
+    assert len(calls) == 1
+    assert calls[0]["function"]["name"] == "run_command"
+    assert rest.strip() == ""
+
+
+def test_bare_json_with_surrounding_text():
+    calls, rest = parse_text_tool_calls(
+        'On it. {"name": "list_dir", "arguments": {"path": "."}} done deciding.'
+    )
+    assert len(calls) == 1
+    assert "list_dir" not in rest and "On it." in rest

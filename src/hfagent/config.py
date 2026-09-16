@@ -13,7 +13,12 @@ def _first_ollama_model() -> str:
     try:
         with request.urlopen("http://127.0.0.1:11434/api/tags", timeout=3) as resp:
             tags = json.load(resp)
-        return tags["models"][0]["name"] if tags.get("models") else ""
+        models = sorted(
+            tags.get("models", []),
+            key=lambda m: m.get("modified_at", ""),
+            reverse=True,
+        )
+        return models[0]["name"] if models else ""
     except Exception:
         return ""
 
