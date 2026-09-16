@@ -80,6 +80,7 @@ class Agent:
             messages=self.messages,
             tools=self.registry.specs(),
             stream=True,
+            temperature=self.config.temperature,
         )
         for chunk in stream:
             if not chunk.choices:

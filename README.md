@@ -74,15 +74,34 @@ Skip them at your own risk with `--yolo` (or `HFAGENT_YOLO=1`).
 | Env var | Default | Meaning |
 | :--- | :--- | :--- |
 | `HF_TOKEN` | — | Hugging Face token (required for the HF router) |
+| `HFAGENT_LOCAL_MODEL` | `~/.cache/huggingface/mlx/qwen2.5-0.5b-4bit` | model path used with `--local` |
 | `HF_BASE_URL` | `https://router.huggingface.co/v1` | any OpenAI-compatible endpoint |
 | `HFAGENT_MODEL` | `Qwen/Qwen2.5-Coder-32B-Instruct` | model id |
 | `HFAGENT_MAX_STEPS` | `25` | agent loop iteration cap |
 
-Local models work too — no token needed:
+## Local models — run fully offline (Apple Silicon / MLX)
+
+Convert any model you downloaded to MLX 4-bit and serve it:
 
 ```bash
-.venv/bin/hfagent --base-url http://localhost:11434/v1   # Ollama
+.venv/bin/python -m mlx_lm convert \
+  --hf-path Qwen/Qwen2.5-0.5B-Instruct --quantize \
+  --mlx-path ~/.cache/huggingface/mlx/qwen2.5-0.5b-4bit
+./scripts/serve-local.sh          # OpenAI-compatible server on :1234
 ```
+
+Then just use the `--local` flag — no token, no cloud:
+
+```bash
+.venv/bin/hfagent --local
+```
+
+Tips for small local models:
+- hfagent defaults to `temperature 0.0` (greedy) — small models emit far more
+  reliable tool calls that way; raise it with `--temperature` if you want variety.
+- Tiny models (0.5B) need terse tool descriptions; they skip tools when the
+  prompt is too wordy. Any OpenAI-compatible server works: Ollama
+  (`--base-url http://localhost:11434/v1`), vLLM, llama.cpp.
 
 ## Roadmap
 

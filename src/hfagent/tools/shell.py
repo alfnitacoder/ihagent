@@ -11,19 +11,12 @@ MAX_OUTPUT_CHARS = 20_000
 
 class RunCommand(Tool):
     name = "run_command"
-    description = (
-        "Run a shell command in the current working directory and return its "
-        "exit code plus combined stdout/stderr. Use for builds, tests, git, "
-        "package management, etc."
-    )
+    description = "Run a shell command; returns exit code and output. Requires user approval."
     parameters = {
         "type": "object",
         "properties": {
-            "command": {"type": "string", "description": "The shell command."},
-            "timeout": {
-                "type": "integer",
-                "description": "Seconds before the command is killed. Default 60.",
-            },
+            "command": {"type": "string"},
+            "timeout": {"type": "integer"},
         },
         "required": ["command"],
     }

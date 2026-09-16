@@ -18,17 +18,11 @@ MAX_FILE_CHARS = 40_000
 
 class ListDir(Tool):
     name = "list_dir"
-    description = (
-        "List a directory's entries (directories first), one per line as "
-        "'type size name'. Use before reading to explore a project."
-    )
+    description = "List a directory's entries (directories first)."
     parameters = {
         "type": "object",
         "properties": {
-            "path": {
-                "type": "string",
-                "description": "Directory path. Default is the current directory.",
-            }
+            "path": {"type": "string"}
         },
     }
 
@@ -54,11 +48,11 @@ class ListDir(Tool):
 
 class ReadFile(Tool):
     name = "read_file"
-    description = "Read a text file and return its content. Output is truncated at 40k chars."
+    description = "Read a text file and return its content."
     parameters = {
         "type": "object",
         "properties": {
-            "path": {"type": "string", "description": "File path, relative or absolute."}
+            "path": {"type": "string"}
         },
         "required": ["path"],
     }
@@ -73,14 +67,11 @@ class ReadFile(Tool):
 
 class WriteFile(Tool):
     name = "write_file"
-    description = (
-        "Create or overwrite a file with the given content. Parent directories "
-        "are created automatically. Prefer minimal edits to existing files."
-    )
+    description = "Create or overwrite a file with content. Requires user approval."
     parameters = {
         "type": "object",
         "properties": {
-            "path": {"type": "string", "description": "File path."},
+            "path": {"type": "string"},
             "content": {"type": "string", "description": "Full file content."},
         },
         "required": ["path", "content"],
@@ -96,18 +87,12 @@ class WriteFile(Tool):
 
 class Grep(Tool):
     name = "grep"
-    description = (
-        "Search files under a directory for a Python regex. Returns up to 80 "
-        "'file:line: text' matches. Skips .git, caches, node_modules, venvs."
-    )
+    description = "Search files with a regex; returns file:line: text matches."
     parameters = {
         "type": "object",
         "properties": {
-            "pattern": {"type": "string", "description": "Regular expression."},
-            "path": {
-                "type": "string",
-                "description": "File or directory to search. Default '.'.",
-            },
+            "pattern": {"type": "string"},
+            "path": {"type": "string"},
         },
         "required": ["pattern"],
     }

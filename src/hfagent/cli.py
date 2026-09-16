@@ -29,6 +29,17 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--base-url", default=None, help="OpenAI-compatible API base URL")
     parser.add_argument("--max-steps", type=int, default=None, help="agent loop cap")
     parser.add_argument(
+        "--temperature",
+        type=float,
+        default=None,
+        help="sampling temperature (default 0.0 = greedy, best for tool calls)",
+    )
+    parser.add_argument(
+        "--local",
+        action="store_true",
+        help="use a local mlx_lm.server (default http://127.0.0.1:1234/v1)",
+    )
+    parser.add_argument(
         "-y", "--yolo", action="store_true", help="auto-approve write/execute tools"
     )
     parser.add_argument("--version", action="store_true", help="print version and exit")
@@ -41,6 +52,8 @@ def make_agent(args: argparse.Namespace) -> tuple[Agent, ConsoleUI]:
         base_url=args.base_url,
         max_steps=args.max_steps,
         auto_approve=args.yolo,
+        temperature=args.temperature,
+        local=args.local,
     )
     if not config.api_key and "huggingface.co" in config.base_url:
         sys.exit(
