@@ -14,6 +14,7 @@ from .ui.console import ConsoleUI
 HELP = """\
 /help             show this help
 /tools            list available tools
+/models           list installed Ollama models (--ollama only)
 /model <id>       switch model (e.g. Qwen/Qwen3-32B)
 /sessions         list saved sessions
 /resume [name]    load a saved session ('last' if no name given)
@@ -66,15 +67,18 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def make_agent(args: argparse.Namespace) -> tuple[Agent, ConsoleUI]:
-    config = Config.load(
-        model=args.model,
-        base_url=args.base_url,
-        max_steps=args.max_steps,
-        auto_approve=args.yolo,
-        temperature=args.temperature,
-        local=args.local,
-        ollama=args.ollama,
-    )
+    try:
+        config = Config.load(
+            model=args.model,
+            base_url=args.base_url,
+            max_steps=args.max_steps,
+            auto_approve=args.yolo,
+            temperature=args.temperature,
+            local=args.local,
+            ollama=args.ollama,
+        )
+    except ValueError as exc:  # ambiguous --ollama name
+        sys.exit(str(exc))
     if args.ollama is not None and not config.model:
         sys.exit(
             "No Ollama model found.\n"
@@ -108,6 +112,14 @@ def repl(agent: Agent, ui: ConsoleUI) -> None:
                 break
             elif command == "/help":
                 print(HELP)
+            elif command == "/models":
+                if "11434" in agent.config.base_url:
+                    from .config import _ollama_model_names
+
+                    for name in _ollama_model_names():
+                        print(("→ " if name == agent.config.model else "  ") + name)
+                else:
+                    print("/models only works with --ollama")
             elif command == "/tools":
                 ui.on_status(", ".join(agent.registry.names()))
             elif command == "/clear":

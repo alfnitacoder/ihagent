@@ -5,6 +5,32 @@ from __future__ import annotations
 import os
 from dataclasses import dataclass
 
+def _ollama_model_names() -> list[str]:
+    import json
+    from urllib import request
+
+    try:
+        with request.urlopen("http://127.0.0.1:11434/api/tags", timeout=3) as resp:
+            tags = json.load(resp)
+        return [m["name"] for m in tags.get("models", [])]
+    except Exception:
+        return []
+
+
+def _resolve_ollama_name(requested: str) -> str:
+    """Resolve a model name with exact-first, then unique-substring matching."""
+    names = _ollama_model_names()
+    if requested in names:
+        return requested
+    matches = [n for n in names if requested.lower() in n.lower()]
+    if len(matches) == 1:
+        return matches[0]
+    raise ValueError(
+        f"no unique Ollama model match for '{requested}'."
+        f"\nInstalled models: {', '.join(names) or '(none)'}"
+    )
+
+
 def _first_ollama_model() -> str:
     """Return the first installed Ollama model, or '' if the server is unreachable."""
     import json
@@ -55,7 +81,8 @@ class Config:
     ) -> "Config":
         if ollama is not None:
             base_url = OLLAMA_BASE_URL
-            model = ollama or os.environ.get("HFAGENT_LOCAL_MODEL") or _first_ollama_model()
+            requested = ollama or os.environ.get("HFAGENT_LOCAL_MODEL") or ""
+            model = _resolve_ollama_name(requested) if requested else _first_ollama_model()
         elif local:
             base_url = base_url or LOCAL_BASE_URL
             model = os.path.expanduser(
