@@ -24,7 +24,7 @@ from .tools import ToolRegistry
 PROPOSE_PATTERN = re.compile(
     r"```(?:sh|bash|shell|console|terminal)\b"
     r"|(?:would you like me to|shall i|want me to|should i)\s+(?:run|execute|list|check|show)"
-    r"|(?:^|\n|\.\s)(?:i'll|i will|let's|let me)\s+[a-z]*\s*"
+    r"|(?:^|\n|[.,;:]\s)(?:i'll|i will|let's|let me)\s+[a-z]*\s*"
     r"(?:run|execute|list|check|fetch|find|get|extract|create|edit|write|read|search|try)\b"
     r"|you can (?:run|use) (?:the|this|it|`)"
     r"|here(?:'s| is) (?:the|a) (?:command|file|diff)",
@@ -42,14 +42,27 @@ FABRICATED_RESULT_RE = re.compile(
 )
 
 FABRICATION_NUDGE = (
-    "Never write tool_response tags or invent command output. If the real "
-    "result is already in the conversation above, summarize it in your own "
-    "words; otherwise call the tool and report only its real result."
+    "Never write tool_response tags or invent command output. Call the "
+    "tool now and report only its real result."
+)
+
+FABRICATION_NUDGE_ESCALATED = (
+    "You invented a result again. That is forbidden. Reply with ONLY the "
+    "function call, in exactly this JSON shape and nothing else:\n"
+    '{"name": "run_command", "arguments": {"command": "<the actual command>"}}\n'
+    "Use ssh_run instead of run_command for remote hosts. No prose, no "
+    "tool_response tags, no invented output."
 )
 
 NUDGE_MESSAGE = (
-    "Do not propose commands or ask permission. Call the appropriate tool now "
-    "and report only the real output. Never invent results."
+    "Do not propose commands in text or ask permission. Call the tool now "
+    "as a function call - run_command for local, ssh_run for remote hosts - "
+    "then report only the real output."
+)
+
+AFFIRMATION_RE = re.compile(
+    r"^\s*(?:yes|y|yeah|yep|ok|okay|sure|go|go ahead|do it|run it|please)\W*$",
+    re.IGNORECASE,
 )
 
 TEXT_TOOL_CALL_RE = re.compile(
@@ -202,6 +215,23 @@ class Agent:
 
     def run(self, user_input: str) -> str:
         rollback_marker = len(self.messages)
+        if AFFIRMATION_RE.match(user_input.strip()):
+            last_assistant = next(
+                (
+                    m
+                    for m in reversed(self.messages)
+                    if m.get("role") == "assistant"
+                ),
+                None,
+            )
+            if last_assistant and PROPOSE_PATTERN.search(
+                last_assistant.get("content") or ""
+            ):
+                user_input = (
+                    user_input.strip()
+                    + " - do it yourself now with a tool call (run_command "
+                    "or ssh_run). No text answer, no invented output."
+                )
         self.messages.append({"role": "user", "content": user_input})
         nudges = {"fabrication": 0, "proposal": 0}
         tool_used = False
@@ -246,12 +276,18 @@ class Agent:
                         "exchange"
                     )
                 if fabricated and nudges["fabrication"] < 2:
+                    escalate = nudges["fabrication"] >= 1
                     nudges["fabrication"] += 1
                     self.ui.on_status(
                         "model faked a tool result - nudging it to run tools"
                     )
                     self.messages.append(
-                        {"role": "user", "content": FABRICATION_NUDGE}
+                        {
+                            "role": "user",
+                            "content": FABRICATION_NUDGE_ESCALATED
+                            if escalate
+                            else FABRICATION_NUDGE,
+                        }
                     )
                     continue
                 if proposing:
