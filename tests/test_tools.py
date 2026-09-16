@@ -9,7 +9,7 @@ def test_specs_are_valid_function_specs():
     names = {spec["function"]["name"] for spec in specs}
     assert names == {
         "list_dir", "read_file", "write_file", "edit_file", "grep",
-        "run_command", "ssh_run",
+        "run_command", "ssh_run", "remember",
     }
     for spec in specs:
         assert spec["type"] == "function"
@@ -67,5 +67,4 @@ def test_ssh_run_bad_host_fails_fast():
     result = registry.get("ssh_run").run(
         host="nonexistent-host-invalid-zz", command="echo hi", timeout=20
     )
-    # BatchMode + bad host -> ssh exits 255 with an error, never hangs
     assert result.startswith("exit code: 255") or "Error" in result

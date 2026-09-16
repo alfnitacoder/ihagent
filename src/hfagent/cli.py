@@ -7,6 +7,7 @@ import sys
 
 from .agent import Agent
 from .config import DEFAULT_MODEL, Config
+from .memory import clear_memory, load_memory
 from .sessions import list_sessions, load_session, save_session
 from .tools import default_registry
 from .ui.console import ConsoleUI
@@ -15,6 +16,8 @@ HELP = """\
 /help             show this help
 /tools            list available tools
 /models           list installed Ollama models (--ollama only)
+/memory           show what the agent remembers long-term
+/forget           wipe long-term memory
 /model <id>       switch model (e.g. Qwen/Qwen3-32B)
 /sessions         list saved sessions
 /resume [name]    load a saved session ('last' if no name given)
@@ -112,6 +115,11 @@ def repl(agent: Agent, ui: ConsoleUI) -> None:
                 break
             elif command == "/help":
                 print(HELP)
+            elif command == "/memory":
+                memory = load_memory().strip()
+                print(memory if memory else "(memory is empty)")
+            elif command == "/forget":
+                print(clear_memory())
             elif command == "/models":
                 if "11434" in agent.config.base_url:
                     from .config import _ollama_model_names

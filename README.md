@@ -145,6 +145,26 @@ Tips for small local models:
   minimum for reliable agent loops. Any OpenAI-compatible server also works via
   `--base-url`: vLLM, llama.cpp, mlx_lm.server.
 
+## Long-term memory
+
+The agent remembers your world across sessions. It saves durable facts via
+its `remember` tool into `~/.hfagent/memory/memory.md` (global, not
+per-project), and that file is injected into every new session's system
+prompt:
+
+```
+❯ remember that kali219 is my Kali pentest box behind voipgw.noc
+remembered: kali219 is my Kali pentest box behind voipgw.noc
+❯ /exit
+
+$ hfagent --ollama        # fresh session later
+❯ what do you know about my servers?
+It remembers kali219 ...             # answered from memory, no tools needed
+```
+
+Manage it with `/memory` (view) and `/forget` (wipe). Secrets and passwords
+should never go in memory — the tool description says so too.
+
 ## Remote hosts (SSH)
 
 `ssh_run` executes single commands on hosts defined in `~/.ssh/config`:
@@ -171,5 +191,5 @@ or interactively with `/sessions` and `/resume <name>`.
 
 ## Roadmap
 
-- **v0.3** — opencode-style TUI (panes, markdown streaming), LSP-ish project context
+- **v0.4** — opencode-style TUI (panes, markdown streaming), per-project memory scopes, auto-summarized session notes
 - **v0.4** — sub-agents, smolagents interop, benchmark hooks for the course challenge

@@ -17,6 +17,7 @@ from typing import Any
 from openai import OpenAI
 
 from .config import Config
+from .memory import load_memory
 from .prompts import SYSTEM_PROMPT
 from .tools import ToolRegistry
 
@@ -164,7 +165,14 @@ def system_prompt() -> str:
         f"Environment: {platform.system()} {platform.release()}, "
         f"working directory: {os.getcwd()}, home directory: {home}."
     )
-    return f"{env}\n\n{SYSTEM_PROMPT}"
+    parts = [env, SYSTEM_PROMPT]
+    memory = load_memory().strip()
+    if memory:
+        parts.append(
+            "Persistent memory from previous sessions (hosts, preferences, "
+            "context - trust this):\n" + memory
+        )
+    return "\n\n".join(parts)
 
 
 class AgentUI:
