@@ -1,5 +1,7 @@
 """Tests for the built-in tool registry."""
 
+from pathlib import Path
+
 from hfagent.tools import default_registry
 
 
