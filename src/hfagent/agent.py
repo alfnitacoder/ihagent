@@ -33,6 +33,7 @@ PROPOSE_PATTERN = re.compile(
     r"|(?:would you like me to|shall i|want me to|should i)\s+(?:run|execute|list|check|show)"
     r"|(?:^|\n|[.,;:]\s)(?:i'll|i will|let's|let me)\s+[a-z]*\s*"
     r"(?:run|execute|list|check|fetch|find|get|extract|create|edit|write|read|search|try|install|configure|update|upgrade|remove|uninstall|download|clone|scan|stop|restart|deploy|build|compile|test|probe|sniff|capture|enumerate|analyze|dump|query|connect|ping|generate|apply|fix|patch|add|clean)\b"
+    r"|this command will\b"
     r"|you can (?:run|use) (?:the|this|it|`)"
     r"|here(?:'s| is) (?:the|a) (?:command|file|diff)",
     re.IGNORECASE,
@@ -281,9 +282,7 @@ class Agent:
                         "model refuses to use its tools; rolled back this "
                         "exchange - try rephrasing or /clear"
                     )
-                proposing = not tool_used and bool(
-                    PROPOSE_PATTERN.search(content)
-                ) or (
+                proposing = bool(PROPOSE_PATTERN.search(content)) or (
                     not tool_used
                     and len(content) <= MAX_ANNOUNCE_CHARS
                     and bool(SHORT_ANNOUNCE_RE.match(content))
@@ -318,10 +317,17 @@ class Agent:
                             {"role": "user", "content": NUDGE_MESSAGE}
                         )
                         continue
-                    return roll_back(
-                        "model kept proposing commands without acting; "
-                        "rolled back this exchange"
+                    if not tool_used:
+                        return roll_back(
+                            "model kept proposing commands without acting; "
+                            "rolled back this exchange"
+                        )
+                    # mid-task: keep the completed work, hand the plan back
+                    self.ui.on_status(
+                        "model stopped after announcing next steps - "
+                        "say 'run it' to continue"
                     )
+                    return content
                 return content
         except KeyboardInterrupt:
             self._patch_interrupted()

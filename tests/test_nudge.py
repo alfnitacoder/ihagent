@@ -277,3 +277,60 @@ def test_prompt_has_persistence_rule():
 
     assert "Never abandon a task after a failure" in SYSTEM_PROMPT
     assert "until the" in SYSTEM_PROMPT and "complete" in SYSTEM_PROMPT
+
+
+def test_midtask_announcement_gets_nudged_then_acts(tmp_path):
+    """Regression: after a failed scan, model plans 'nslookup' but must RUN it."""
+    turns = [
+        # turn 1: the nmap scan runs and fails to resolve
+        [
+            Chunk(
+                Delta(
+                    tool_calls=[
+                        ToolCallDelta(
+                            0,
+                            id="c1",
+                            name="ssh_run",
+                            arguments='{"host": "kali219", "command": "nmap sims.pn.cu"}',
+                        )
+                    ]
+                )
+            )
+        ],
+        # turn 2: announces the next step without acting (this command will...)
+        [
+            Chunk(
+                Delta(
+                    content=(
+                        "The scan failed to resolve the domain. "
+                        "This command will attempt to resolve it with nslookup."
+                    )
+                )
+            )
+        ],
+        # turn 3 (after nudge): actually runs nslookup
+        [
+            Chunk(
+                Delta(
+                    tool_calls=[
+                        ToolCallDelta(
+                            0,
+                            id="c2",
+                            name="ssh_run",
+                            arguments='{"host": "kali219", "command": "nslookup sims.pn.cu"}',
+                        )
+                    ]
+                )
+            )
+        ],
+        # turn 4: final report
+        [Chunk(Delta(content="DNS does not resolve sims.pn.cu - that is the blocker."))],
+    ]
+    agent, ui = make_agent(tmp_path, turns)
+    ui.statuses = []
+    ui.on_status = lambda text: ui.statuses.append(text)
+    final = agent.run("use kali219 scan the sims")
+
+    assert final.startswith("DNS does not resolve")
+    assert len(ui.actions) == 2  # nmap + nslookup both ran
+    assert any("nudging" in s for s in ui.statuses)
