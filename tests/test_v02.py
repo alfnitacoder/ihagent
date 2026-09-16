@@ -66,6 +66,10 @@ def test_run_command_preview():
 
 
 def test_session_roundtrip(tmp_path):
+    from hfagent.sessions import session_dir
+
+    for stale in session_dir(str(tmp_path)).glob("*.json"):
+        stale.unlink()  # pytest reuses numbered tmp dirs across runs
     msgs = [
         {"role": "system", "content": "sys"},
         {"role": "user", "content": "what files are here?"},
