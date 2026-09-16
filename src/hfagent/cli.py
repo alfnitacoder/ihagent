@@ -40,6 +40,14 @@ def build_parser() -> argparse.ArgumentParser:
         help="use a local mlx_lm.server (default http://127.0.0.1:1234/v1)",
     )
     parser.add_argument(
+        "--ollama",
+        nargs="?",
+        const="",
+        default=None,
+        metavar="MODEL",
+        help="use a local Ollama model (auto-detects if no name given)",
+    )
+    parser.add_argument(
         "-y", "--yolo", action="store_true", help="auto-approve write/execute tools"
     )
     parser.add_argument("--version", action="store_true", help="print version and exit")
@@ -54,7 +62,15 @@ def make_agent(args: argparse.Namespace) -> tuple[Agent, ConsoleUI]:
         auto_approve=args.yolo,
         temperature=args.temperature,
         local=args.local,
+        ollama=args.ollama,
     )
+    if args.ollama is not None and not config.model:
+        sys.exit(
+            "No Ollama model found.\n"
+            "  - is Ollama running?  (ollama serve)\n"
+            "  - is a model installed?  (ollama list)\n"
+            "  - or name one explicitly:  hfagent --ollama <model>"
+        )
     if not config.api_key and "huggingface.co" in config.base_url:
         sys.exit(
             "No API key found.\n"

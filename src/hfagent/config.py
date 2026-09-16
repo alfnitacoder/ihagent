@@ -5,9 +5,23 @@ from __future__ import annotations
 import os
 from dataclasses import dataclass
 
+def _first_ollama_model() -> str:
+    """Return the first installed Ollama model, or '' if the server is unreachable."""
+    import json
+    from urllib import request
+
+    try:
+        with request.urlopen("http://127.0.0.1:11434/api/tags", timeout=3) as resp:
+            tags = json.load(resp)
+        return tags["models"][0]["name"] if tags.get("models") else ""
+    except Exception:
+        return ""
+
+
 DEFAULT_MODEL = "Qwen/Qwen2.5-Coder-32B-Instruct"
 DEFAULT_BASE_URL = "https://router.huggingface.co/v1"
 LOCAL_BASE_URL = "http://127.0.0.1:1234/v1"
+OLLAMA_BASE_URL = "http://127.0.0.1:11434/v1"
 DEFAULT_LOCAL_MODEL = (
     "~/.cache/huggingface/mlx/qwen2.5-0.5b-4bit"
 )
@@ -32,8 +46,12 @@ class Config:
         auto_approve: bool = False,
         temperature: float | None = None,
         local: bool = False,
+        ollama: str | None = None,
     ) -> "Config":
-        if local:
+        if ollama is not None:
+            base_url = OLLAMA_BASE_URL
+            model = ollama or os.environ.get("HFAGENT_LOCAL_MODEL") or _first_ollama_model()
+        elif local:
             base_url = base_url or LOCAL_BASE_URL
             model = os.path.expanduser(
                 model or os.environ.get("HFAGENT_LOCAL_MODEL", DEFAULT_LOCAL_MODEL)
