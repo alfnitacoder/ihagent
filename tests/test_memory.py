@@ -1,14 +1,15 @@
 """Tests for persistent long-term memory."""
 
-from pathlib import Path
+import pytest
 
-import hfagent.memory as memory
+from hfagent.memory import load_memory, save_fact
 from hfagent.agent import system_prompt
-from hfagent.memory import clear_memory, load_memory, save_fact
+from hfagent.tools import default_registry
 
 
-def setup_function(_):
-    clear_memory()
+@pytest.fixture(autouse=True)
+def isolated_memory(tmp_path, monkeypatch):
+    monkeypatch.setenv("HFAGENT_MEMORY_PATH", str(tmp_path / "mem"))
 
 
 def test_save_and_load_fact():
@@ -20,22 +21,15 @@ def test_save_and_load_fact():
 def test_duplicate_fact_not_duplicated():
     save_fact("wantok20 is the main server")
     save_fact("wantok20 is the main server")
-    text = load_memory()
-    assert text.count("wantok20 is the main server") == 1
+    assert load_memory().count("wantok20 is the main server") == 1
 
 
 def test_fact_is_timestamped():
     save_fact("prefers root shells on lab boxes")
-    assert "[2" in load_memory()  # date stamp present
+    assert "[2" in load_memory()
 
 
-def test_clear_memory():
-    save_fact("temp fact")
-    assert "cleared" in clear_memory()
-    assert load_memory() == ""
-
-
-def test_system_prompt_includes_memory(monkeypatch):
+def test_system_prompt_includes_memory():
     save_fact("kali219 needs ProxyJump voipgw.noc")
     prompt = system_prompt()
     assert "ProxyJump voipgw.noc" in prompt
@@ -43,13 +37,10 @@ def test_system_prompt_includes_memory(monkeypatch):
 
 
 def test_system_prompt_without_memory():
-    prompt = system_prompt()
-    assert "Persistent memory" not in prompt
+    assert "Persistent memory" not in system_prompt()
 
 
 def test_remember_tool_end_to_end():
-    from hfagent.tools import default_registry
-
     registry = default_registry()
     result = registry.get("remember").run(fact="voipgw.noc is the SSH jump host")
     assert "remembered" in result

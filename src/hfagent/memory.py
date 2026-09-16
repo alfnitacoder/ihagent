@@ -16,8 +16,9 @@ MAX_MEMORY_CHARS = 6_000
 
 
 def memory_path() -> Path:
-    MEMORY_ROOT.mkdir(parents=True, exist_ok=True)
-    return MEMORY_ROOT / "memory.md"
+    root = Path(os.environ.get("HFAGENT_MEMORY_PATH", "") or MEMORY_ROOT)
+    root.mkdir(parents=True, exist_ok=True)
+    return root / "memory.md"
 
 
 def load_memory() -> str:
