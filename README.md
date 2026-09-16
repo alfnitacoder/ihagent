@@ -178,6 +178,26 @@ It is non-interactive by design (one command per call, `BatchMode=yes`,
 `ConnectTimeout=10`) — interactive sessions would hang the agent. Keep your
 keys in `ssh-agent` if they have passphrases.
 
+### Long tasks: background mode
+
+Foreground commands die when the timeout hits. For anything long (scans,
+installs, builds), use `background: true` — the task runs detached via
+`nohup sh -c` and **survives SSH disconnection**:
+
+```
+❯ run a full nmap scan on kali219 in the background
+→ action: ssh_run (background: true)
+   started in background on kali219
+   pid: 125943   log: /tmp/hfagent-task-095244.log
+   check progress: ssh_run(..., 'tail -n 30 /tmp/hfagent-task-095244.log')
+   check finished: ssh_run(..., 'grep BG_DONE ... && echo FINISHED || echo RUNNING')
+```
+
+The log streams the task's output live; `BG_EXIT:n` records the exit status
+and `BG_DONE` marks completion — the agent polls these with short follow-up
+calls (connection multiplexing makes each check ~0.5s). No cron needed: just
+ask "check on the scan" whenever you want a status update.
+
 ## Sessions
 
 Every turn auto-saves to `~/.hfagent/sessions/<project>/`. Resume where you

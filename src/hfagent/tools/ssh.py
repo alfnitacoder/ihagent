@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import shlex
 import subprocess
 from datetime import datetime
 
@@ -58,15 +59,35 @@ class SshRun(Tool):
             "-o", "ConnectTimeout=10",
             "-o", "BatchMode=yes",
             "-o", "StrictHostKeyChecking=accept-new",
+            # connection multiplexing: poll calls reuse one master connection,
+            # so repeated checks are near-instant instead of re-handshaking
+            "-o", "ControlMaster=auto",
+            "-o", "ControlPath=~/.ssh/hfagent-cm-%C",
+            "-o", "ControlPersist=600",
             host,
             remote_command,
         ]
 
-    def _start_background(
-        self, host: str, command: str
-    ) -> str:
+    def _start_background(self, host: str, command: str) -> str:
+        """Start the task detached and return immediately.
+
+        The task runs as `sh -c` with ALL output redirected to the log, so
+        nothing holds the ssh channel open (instant return), and a BG_DONE
+        marker at the end gives reliable completion detection.
+        """
         log = f"/tmp/hfagent-task-{datetime.now().strftime('%H%M%S')}.log"
-        remote = f"nohup {command} > {log} 2>&1 < /dev/null & echo BG_PID:$!"
+        qlog = shlex.quote(log)
+        # group the command so $? is its exit status; stream its output into
+        # the log, then drop exit-status and done markers for poll detection
+        inner = (
+            f"( {command} ) >> {qlog} 2>&1 ; "
+            f"echo BG_EXIT:$? >> {qlog} ; "
+            f"echo BG_DONE >> {qlog}"
+        )
+        remote = (
+            f"nohup sh -c {shlex.quote(inner)} "
+            f"> /dev/null 2>&1 < /dev/null & echo BG_PID:$!"
+        )
         try:
             proc = subprocess.run(
                 self._argv(host, remote),
@@ -75,7 +96,7 @@ class SshRun(Tool):
                 timeout=30,
             )
         except subprocess.TimeoutExpired:
-            return f"Error: could not start background task (ssh took >30s)"
+            return "Error: could not start background task (ssh took >30s)"
         pid = ""
         for line in (proc.stdout or "").splitlines():
             if line.strip().startswith("BG_PID:"):
@@ -83,17 +104,15 @@ class SshRun(Tool):
         lines = [f"started in background on {host} (exit code: {proc.returncode})"]
         lines.append(f"pid: {pid or '(unknown)'}")
         lines.append(f"log: {log}")
-        if pid:
-            lines.append(
-                f"check progress: ssh_run(host='{host}', "
-                f"command='tail -n 30 {log}')"
-            )
-            lines.append(
-                f"check finished: ssh_run(host='{host}', "
-                f"command='ps -p {pid} > /dev/null 2>&1 && echo RUNNING || echo FINISHED')"
-            )
-        else:
-            lines.append(f"raw: {out}" if (out := (proc.stdout or "") + (proc.stderr or "")) else "")
+        lines.append(
+            f"check progress: ssh_run(host='{host}', "
+            f"command='tail -n 30 {log}')"
+        )
+        lines.append(
+            f"check finished + exit status: ssh_run(host='{host}', "
+            f"command='grep BG_DONE {log} > /dev/null && grep BG_EXIT {log} "
+            f"|| echo RUNNING')"
+        )
         return "\n".join(lines)
 
     def run(
