@@ -347,6 +347,8 @@ class Agent:
                         "say 'run it' to continue"
                     )
                     return content
+                if not content and tool_used:
+                    return "(done - results in the observations above)"
                 return content
         except KeyboardInterrupt:
             self._patch_interrupted()
@@ -357,6 +359,23 @@ class Agent:
 
     # ------------------------------------------------------------- internals
 
+    @staticmethod
+    def _sanitize_messages(
+        messages: list[dict[str, Any]],
+    ) -> list[dict[str, Any]]:
+        """Ollama 400s on assistant messages with null content and no
+        tool_calls; scrub any that slipped in (e.g. from saved sessions)."""
+        cleaned = []
+        for m in messages:
+            if (
+                m.get("role") == "assistant"
+                and m.get("content") is None
+                and not m.get("tool_calls")
+            ):
+                m = {**m, "content": ""}
+            cleaned.append(m)
+        return cleaned
+
     def _step(self) -> dict[str, Any]:
         """One model turn: stream text + tool calls, then run pending tools."""
         content_parts: list[str] = []
@@ -364,7 +383,7 @@ class Agent:
 
         stream = self.client.chat.completions.create(
             model=self.config.model,
-            messages=self.messages,
+            messages=self._sanitize_messages(self.messages),
             tools=self.registry.specs(),
             stream=True,
             temperature=self.config.temperature,
@@ -409,7 +428,9 @@ class Agent:
                 content = remaining
         self.ui.on_assistant_done(content)
 
-        message: dict[str, Any] = {"role": "assistant", "content": content or None}
+        # NOTE: never store None here - Ollama rejects assistant messages with
+        # null content when they carry no tool_calls; empty string is safe.
+        message: dict[str, Any] = {"role": "assistant", "content": content}
         if ordered:
             message["tool_calls"] = [
                 {

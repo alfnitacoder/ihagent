@@ -383,3 +383,49 @@ def test_proposal_rollback_gives_tip(tmp_path):
     assert final == ""
     assert len(agent.messages) == base_len
     assert any("Tip:" in e for e in ui.errors)
+
+
+def test_empty_final_after_tools_returns_note_not_none(tmp_path):
+    """Model ends with empty text after work: store '' and say (done)."""
+    turns = [
+        [
+            Chunk(
+                Delta(
+                    tool_calls=[
+                        ToolCallDelta(
+                            0, id="c1", name="list_dir", arguments="{}"
+                        )
+                    ]
+                )
+            )
+        ],
+        [Chunk(Delta(content=""))],  # empty final answer
+    ]
+    agent, ui = make_agent(tmp_path, turns)
+    final = agent.run("list files")
+
+    assert "(done" in final
+    last_assistant = [
+        m for m in agent.messages if m.get("role") == "assistant"
+    ][-1]
+    assert last_assistant["content"] == ""
+
+
+def test_none_content_history_is_sanitized_for_ollama(tmp_path):
+    """Poisoned session history (assistant content None, no tool_calls)
+    must be scrubbed before every API call - Ollama 400s otherwise."""
+    turns = [[Chunk(Delta(content="recovered fine"))]]
+    agent, ui = make_agent(tmp_path, turns)
+    agent.messages.append({"role": "assistant", "content": None})
+    agent.messages.append({"role": "user", "content": "hello"})
+    final = agent.run("hello")
+
+    assert final == "recovered fine"
+    sent = agent.client.chat.completions.calls[-1]["messages"]
+    bad = [
+        m for m in sent
+        if m.get("role") == "assistant"
+        and m.get("content") is None
+        and not m.get("tool_calls")
+    ]
+    assert not bad

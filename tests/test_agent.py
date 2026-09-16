@@ -41,8 +41,10 @@ class Chunk:
 class FakeCompletions:
     def __init__(self, turns):
         self.turns = list(turns)
+        self.calls = []
 
     def create(self, **kwargs):
+        self.calls.append(kwargs)
         return iter(self.turns.pop(0))
 
 
