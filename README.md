@@ -86,8 +86,18 @@ Skip them at your own risk with `--yolo` (or `HFAGENT_YOLO=1`).
 
 ### Ollama (recommended)
 
-hfagent auto-detects installed Ollama models — GGUFs pulled from the HF Hub
-(`hf.co/...`) work too:
+Use the official Qwen2.5-Coder model — its tool calling is reliable:
+
+```bash
+ollama pull qwen2.5-coder:7b     # ~4.7 GB
+.venv/bin/hfagent --ollama       # auto-detects the newest installed model
+```
+
+hfagent auto-detects installed Ollama models (newest first) — GGUFs pulled
+from the HF Hub (`hf.co/...`, e.g. 'abliterated' variants) also work, but
+their converted templates tend to fabricate results instead of calling
+tools; hfagent strips faked `<tool_response>` blocks and nudges the model
+back to its tools automatically:
 
 ```bash
 .venv/bin/hfagent --ollama          # first installed model
