@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import subprocess
+from datetime import datetime
 
 from .base import Tool
 
@@ -30,25 +31,77 @@ class SshRun(Tool):
             },
             "timeout": {
                 "type": "integer",
-                "description": "Seconds before the command is killed. Default 60.",
+                "description": "Seconds before a FOREGROUND command is killed. Default 60.",
+            },
+            "background": {
+                "type": "boolean",
+                "description": "Run detached with nohup so the task survives "
+                "disconnection; returns a PID and log path to poll. Use for "
+                "long tasks (scans, installs, builds).",
             },
         },
         "required": ["host", "command"],
     }
     needs_approval = True
 
-    def preview(self, host: str, command: str, timeout: int = 60) -> str:
+    def preview(
+        self, host: str, command: str, timeout: int = 60, background: bool = False
+    ) -> str:
+        if background:
+            return f"$ ssh {host} 'nohup {command} > <log> 2>&1 &' (detached)"
         return f"$ ssh {host} '{command}'\n(timeout: {timeout}s)"
 
-    def run(self, host: str, command: str, timeout: int = 60) -> str:
-        argv = [
+    @staticmethod
+    def _argv(host: str, remote_command: str) -> list[str]:
+        return [
             "ssh",
             "-o", "ConnectTimeout=10",
             "-o", "BatchMode=yes",
             "-o", "StrictHostKeyChecking=accept-new",
             host,
-            command,
+            remote_command,
         ]
+
+    def _start_background(
+        self, host: str, command: str
+    ) -> str:
+        log = f"/tmp/hfagent-task-{datetime.now().strftime('%H%M%S')}.log"
+        remote = f"nohup {command} > {log} 2>&1 < /dev/null & echo BG_PID:$!"
+        try:
+            proc = subprocess.run(
+                self._argv(host, remote),
+                capture_output=True,
+                text=True,
+                timeout=30,
+            )
+        except subprocess.TimeoutExpired:
+            return f"Error: could not start background task (ssh took >30s)"
+        pid = ""
+        for line in (proc.stdout or "").splitlines():
+            if line.strip().startswith("BG_PID:"):
+                pid = line.split("BG_PID:", 1)[1].strip()
+        lines = [f"started in background on {host} (exit code: {proc.returncode})"]
+        lines.append(f"pid: {pid or '(unknown)'}")
+        lines.append(f"log: {log}")
+        if pid:
+            lines.append(
+                f"check progress: ssh_run(host='{host}', "
+                f"command='tail -n 30 {log}')"
+            )
+            lines.append(
+                f"check finished: ssh_run(host='{host}', "
+                f"command='ps -p {pid} > /dev/null 2>&1 && echo RUNNING || echo FINISHED')"
+            )
+        else:
+            lines.append(f"raw: {out}" if (out := (proc.stdout or "") + (proc.stderr or "")) else "")
+        return "\n".join(lines)
+
+    def run(
+        self, host: str, command: str, timeout: int = 60, background: bool = False
+    ) -> str:
+        if background:
+            return self._start_background(host, command)
+        argv = self._argv(host, command)
         try:
             proc = subprocess.run(
                 argv, capture_output=True, text=True, timeout=timeout

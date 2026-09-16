@@ -57,7 +57,9 @@ def test_unknown_tool_message():
 def test_ssh_run_spec_and_preview():
     registry = default_registry()
     spec = next(s for s in registry.specs() if s["function"]["name"] == "ssh_run")
-    assert set(spec["function"]["parameters"]["properties"]) == {"host", "command", "timeout"}
+    assert set(spec["function"]["parameters"]["properties"]) == {
+        "host", "command", "timeout", "background"
+    }
     preview = registry.get("ssh_run").preview(host="wantok20", command="uptime")
     assert preview.startswith("$ ssh wantok20 'uptime'")
 
@@ -68,3 +70,33 @@ def test_ssh_run_bad_host_fails_fast():
         host="nonexistent-host-invalid-zz", command="echo hi", timeout=20
     )
     assert result.startswith("exit code: 255") or "Error" in result
+
+
+def test_run_command_background_mode(tmp_path):
+    import re
+    import time
+
+    from hfagent.tools import default_registry
+
+    registry = default_registry()
+    result = registry.get("run_command").run(
+        command="echo bg-task-ran", background=True
+    )
+    assert "started in background" in result
+    match = re.search(r"log: (\S+)", result)
+    assert match, result
+    log_path = Path(match.group(1))
+    deadline = time.time() + 5
+    while time.time() < deadline:
+        if log_path.exists() and "bg-task-ran" in log_path.read_text():
+            break
+        time.sleep(0.2)
+    assert "bg-task-ran" in log_path.read_text()
+
+
+def test_ssh_run_background_preview():
+    registry = default_registry()
+    preview = registry.get("ssh_run").preview(
+        host="kali219", command="nmap -sV target", background=True
+    )
+    assert "detached" in preview and "nohup" in preview
