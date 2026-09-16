@@ -3,6 +3,7 @@
 from .base import Tool, ToolRegistry
 from .files import EditFile, Grep, ListDir, ReadFile, WriteFile
 from .shell import RunCommand
+from .ssh import SshRun
 
 __all__ = [
     "Tool",
@@ -14,11 +15,14 @@ __all__ = [
     "WriteFile",
     "Grep",
     "RunCommand",
+    "SshRun",
 ]
 
 
 def default_registry() -> ToolRegistry:
     registry = ToolRegistry()
-    for tool in (ListDir(), ReadFile(), Grep(), WriteFile(), EditFile(), RunCommand()):
+    for tool in (
+        ListDir(), ReadFile(), Grep(), WriteFile(), EditFile(), RunCommand(), SshRun()
+    ):
         registry.register(tool)
     return registry

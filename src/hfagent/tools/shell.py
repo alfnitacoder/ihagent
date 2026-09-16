@@ -13,7 +13,9 @@ class RunCommand(Tool):
     name = "run_command"
     description = (
         "Run a shell command; returns exit code and output. Requires user "
-        "approval. Prefer quiet flags for noisy tools (e.g. curl -s, wget -q)."
+        "approval. Prefer quiet flags for noisy tools (e.g. curl -s, wget -q). "
+        "Never open interactive sessions (bare ssh, vim) - they hang; "
+        "use ssh_run for remote hosts instead."
     )
     parameters = {
         "type": "object",
