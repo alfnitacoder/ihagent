@@ -56,13 +56,13 @@ def test_proposal_nudges_capped_at_two(tmp_path):
         [Chunk(Delta(content="done talking"))],
     ]
     agent, ui = make_agent(tmp_path, turns)
-    agent.run("do it")
-    nudges = [
-        m
-        for m in agent.messages
-        if m["role"] == "user" and "Do not propose" in m["content"]
-    ]
-    assert len(nudges) == 2
+    base_len = len(agent.messages)  # system only
+    final = agent.run("do it")
+
+    # after 2 nudges the exchange is rolled back clean
+    assert final == ""
+    assert len(agent.messages) == base_len
+    assert len(ui.errors) == 1 and "rolled back" in ui.errors[0]
 
 
 def test_nudge_fires_on_announced_intent(tmp_path):

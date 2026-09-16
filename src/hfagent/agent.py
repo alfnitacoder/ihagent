@@ -29,6 +29,12 @@ PROPOSE_PATTERN = re.compile(
     re.IGNORECASE,
 )
 
+DEAD_LOOP_RE = re.compile(
+    r"can(?:not|'?t)\s+(?:execute|run)\s+commands"
+    r"|i (?:have no|don't have) (?:access to|ability to) (?:execute|run)",
+    re.IGNORECASE,
+)
+
 FABRICATED_RESULT_RE = re.compile(
     r"<tool_response>.*?(?:</tool_response>|$)", re.DOTALL
 )
@@ -193,9 +199,16 @@ class Agent:
     # ------------------------------------------------------------------- loop
 
     def run(self, user_input: str) -> str:
+        rollback_marker = len(self.messages)
         self.messages.append({"role": "user", "content": user_input})
         nudges = {"fabrication": 0, "proposal": 0}
         tool_used = False
+
+        def roll_back(reason: str) -> str:
+            """Discard the poisoned exchange so history stays clean."""
+            del self.messages[rollback_marker:]
+            self.ui.on_error(reason)
+            return ""
         try:
             for _step in range(self.config.max_steps):
                 message = self._step()
@@ -217,9 +230,19 @@ class Agent:
                     content = re.sub(r"</?tool_response>?", "", content)
                     content = content.strip()
                     message["content"] = content
+                if DEAD_LOOP_RE.search(content):
+                    return roll_back(
+                        "model refuses to use its tools; rolled back this "
+                        "exchange - try rephrasing or /clear"
+                    )
                 proposing = not tool_used and bool(
                     PROPOSE_PATTERN.search(content)
                 )
+                if fabricated and content == "" and nudges["fabrication"] >= 2:
+                    return roll_back(
+                        "model kept fabricating results; rolled back this "
+                        "exchange"
+                    )
                 if fabricated and nudges["fabrication"] < 2:
                     nudges["fabrication"] += 1
                     self.ui.on_status(
@@ -229,15 +252,20 @@ class Agent:
                         {"role": "user", "content": FABRICATION_NUDGE}
                     )
                     continue
-                if proposing and nudges["proposal"] < 2:
-                    nudges["proposal"] += 1
-                    self.ui.on_status(
-                        "model announced without acting - nudging it"
+                if proposing:
+                    if nudges["proposal"] < 2:
+                        nudges["proposal"] += 1
+                        self.ui.on_status(
+                            "model announced without acting - nudging it"
+                        )
+                        self.messages.append(
+                            {"role": "user", "content": NUDGE_MESSAGE}
+                        )
+                        continue
+                    return roll_back(
+                        "model kept proposing commands without acting; "
+                        "rolled back this exchange"
                     )
-                    self.messages.append(
-                        {"role": "user", "content": NUDGE_MESSAGE}
-                    )
-                    continue
                 return content
         except KeyboardInterrupt:
             self._patch_interrupted()
