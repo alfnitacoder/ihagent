@@ -7,6 +7,7 @@ import json
 from rich.console import Console
 from rich.panel import Panel
 from rich.text import Text
+from rich.text import Text
 
 from ..agent import AgentUI
 from .. import __version__
@@ -37,7 +38,8 @@ class ConsoleUI(AgentUI):
         c.print()
 
     def on_status(self, text: str) -> None:
-        self.console.print(text, style="dim")
+        # markup=False: dynamic text may contain [brackets] (sed, tags...)
+        self.console.print(text, style="dim", markup=False, highlight=False)
 
     def on_assistant_delta(self, text: str) -> None:
         self.console.print(text, end="", markup=False, highlight=False, soft_wrap=True)
@@ -48,7 +50,7 @@ class ConsoleUI(AgentUI):
     def on_action(self, tool_name: str, arguments: dict) -> None:
         self.console.print(
             Panel(
-                _dump(arguments),
+                Text(_dump(arguments)),
                 title=f"action: {tool_name}",
                 title_align="left",
                 border_style="magenta",
@@ -59,7 +61,7 @@ class ConsoleUI(AgentUI):
         snippet = result if len(result) <= MAX_OBS_CHARS else result[:MAX_OBS_CHARS] + " …"
         self.console.print(
             Panel(
-                snippet,
+                Text(snippet),
                 title=f"observation: {tool_name}",
                 title_align="left",
                 border_style="dim",
@@ -67,12 +69,20 @@ class ConsoleUI(AgentUI):
         )
 
     def on_error(self, message: str) -> None:
-        self.console.print(f"error: {message}", style="bold red")
+        # Never let error printing itself crash the REPL: render as literal
+        # Text (no markup) and fall back to builtin print on any failure.
+        try:
+            self.console.print(
+                Text(f"error: {message}", style="bold red")
+            )
+        except Exception:
+            print(f"error: {message}")
 
     def approve(self, tool_name: str, arguments: dict, preview: str | None = None) -> bool:
+        body = preview if preview is not None else _dump(arguments)
         self.console.print(
             Panel(
-                preview if preview is not None else _dump(arguments),
+                Text(body),
                 title=f"approval needed: {tool_name}",
                 title_align="left",
                 border_style="yellow",
