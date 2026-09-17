@@ -348,7 +348,13 @@ class Agent:
                             "model announced without acting - nudging it"
                             + (" (auto)" if auto else "")
                         )
-                        if escalate and auto:
+                        if escalate and nudges["proposal"] >= 3:
+                            # late auto nudges: hardest form - quote the plan
+                            # and demand the exact function-call JSON
+                            nudge = PROPOSAL_NUDGE_ESCALATED.format(
+                                announcement=content.strip()[:300]
+                            )
+                        elif escalate and auto:
                             nudge = AUTO_CONTINUE_NUDGE
                         elif escalate:
                             nudge = PROPOSAL_NUDGE_ESCALATED.format(
