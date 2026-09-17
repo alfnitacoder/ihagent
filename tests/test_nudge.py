@@ -492,3 +492,81 @@ def test_approval_default_asks(tmp_path):
     ui.allow = True
     agent.run(f"write {tmp_path / 'x.txt'}")
     assert len(ui.approvals) == 1
+
+
+def test_auto_mode_nudges_more_persistently(tmp_path):
+    """In auto mode the agent keeps demanding action (6 nudges, not 2)."""
+    announce = "I will check the target now."
+    turns = (
+        [[Chunk(Delta(content=announce))] for _ in range(5)]
+        + [
+            [
+                Chunk(
+                    Delta(
+                        tool_calls=[
+                            ToolCallDelta(
+                                0,
+                                id="c1",
+                                name="ssh_run",
+                                arguments='{"host": "kali219", "command": "id"}',
+                            )
+                        ]
+                    )
+                )
+            ]
+        ]
+        + [[Chunk(Delta(content="checked"))]]
+    ]
+    agent, ui = make_agent(tmp_path, turns)
+    ui.statuses = []
+    ui.on_status = lambda text: ui.statuses.append(text)
+    agent.config.approval = "auto"
+    final = agent.run("check the target")
+
+    assert final == "checked"
+    assert len(ui.actions) == 1
+    assert sum("(auto)" in s for s in ui.statuses) == 5  # 5 nudges, all auto
+
+
+def test_default_mode_hands_back_midtask_after_two(tmp_path):
+    turns = (
+        [
+            [
+                Chunk(
+                    Delta(
+                        tool_calls=[
+                            ToolCallDelta(
+                                0,
+                                id="c1",
+                                name="ssh_run",
+                                arguments='{"host": "kali219", "command": "id"}',
+                            )
+                        ]
+                    )
+                )
+            ]
+        ]
+        + [[Chunk(Delta(content="I will check the target now."))] for _ in range(3)]
+    ]
+    agent, ui = make_agent(tmp_path, turns)
+    ui.statuses = []
+    ui.on_status = lambda text: ui.statuses.append(text)
+    agent.config.approval = "default"
+    final = agent.run("check the target")
+
+    assert final == "I will check the target now."
+    assert any("say 'run it'" in s for s in ui.statuses)
+    assert sum("(auto)" in s for s in ui.statuses) == 0
+
+
+def test_auto_mode_beyond_limit_returns_plan(tmp_path):
+    announce = "I will check the target now."
+    turns = [[Chunk(Delta(content=announce))] for _ in range(8)]
+    agent, ui = make_agent(tmp_path, turns)
+    ui.statuses = []
+    ui.on_status = lambda text: ui.statuses.append(text)
+    agent.config.approval = "auto"
+    final = agent.run("check the target")
+
+    assert final == announce
+    assert any("returning its plan" in s for s in ui.statuses)

@@ -296,12 +296,17 @@ class Agent:
                     and len(content) <= MAX_ANNOUNCE_CHARS
                     and bool(SHORT_ANNOUNCE_RE.match(content))
                 )
-                if fabricated and content == "" and nudges["fabrication"] >= 2:
+                fab_limit = 4 if self.config.approval == "auto" else 2
+                if (
+                    fabricated
+                    and content == ""
+                    and nudges["fabrication"] >= fab_limit
+                ):
                     return roll_back(
                         "model kept fabricating results; rolled back this "
                         "exchange"
                     )
-                if fabricated and nudges["fabrication"] < 2:
+                if fabricated and nudges["fabrication"] < fab_limit:
                     escalate = nudges["fabrication"] >= 1
                     nudges["fabrication"] += 1
                     self.ui.on_status(
@@ -317,11 +322,14 @@ class Agent:
                     )
                     continue
                 if proposing:
-                    if nudges["proposal"] < 2:
+                    auto = self.config.approval == "auto"
+                    proposal_limit = 6 if auto else 2
+                    if nudges["proposal"] < proposal_limit:
                         escalate = nudges["proposal"] >= 1
                         nudges["proposal"] += 1
                         self.ui.on_status(
                             "model announced without acting - nudging it"
+                            + (" (auto)" if auto else "")
                         )
                         self.messages.append(
                             {
@@ -341,7 +349,15 @@ class Agent:
                             "direct command, e.g. 'on kali219 run: "
                             "ls /usr/share/wordlists'"
                         )
-                    # mid-task: keep the completed work, hand the plan back
+                    if auto:
+                        # never stall on a plan in auto mode: return the plan
+                        # as the final answer instead of waiting for 'run it'
+                        self.ui.on_status(
+                            "model kept announcing without acting after "
+                            "multiple nudges - returning its plan"
+                        )
+                        return content
+                    # default mode mid-task: keep completed work, hand back
                     self.ui.on_status(
                         "model stopped after announcing next steps - "
                         "say 'run it' to continue"
