@@ -402,6 +402,8 @@ def test_empty_final_after_tools_returns_note_not_none(tmp_path):
             )
         ],
         [Chunk(Delta(content=""))],  # empty final answer
+        [Chunk(Delta(content=""))],  # bounces twice, then gives up
+        [Chunk(Delta(content=""))],
     ]
     agent, ui = make_agent(tmp_path, turns)
     final = agent.run("list files")

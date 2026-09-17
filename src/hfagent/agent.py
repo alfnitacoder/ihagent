@@ -269,7 +269,7 @@ class Agent:
                     "or ssh_run). No text answer, no invented output."
                 )
         self.messages.append({"role": "user", "content": user_input})
-        nudges = {"fabrication": 0, "proposal": 0}
+        nudges = {"fabrication": 0, "proposal": 0, "empty": 0}
         tool_used = False
         auto = self.config.approval == "auto"
 
@@ -339,6 +339,31 @@ class Agent:
                         }
                     )
                     continue
+                if not content:
+                    # degenerate empty generation: bounce the model back
+                    if nudges["empty"] < 2:
+                        nudges["empty"] += 1
+                        self.ui.on_status(
+                            "model returned an empty response - retrying"
+                        )
+                        self.messages.append(
+                            {
+                                "role": "user",
+                                "content": (
+                                    "Your previous response was empty. "
+                                    "Respond now: either call the "
+                                    "appropriate tool, or write your full "
+                                    "answer as text."
+                                ),
+                            }
+                        )
+                        continue
+                    if tool_used:
+                        return "(done - results in the observations above)"
+                    return roll_back(
+                        "model returned only empty responses; rolled back "
+                        "this exchange - try rephrasing"
+                    )
                 if proposing:
                     proposal_limit = 6 if auto else 2
                     if nudges["proposal"] < proposal_limit:
@@ -387,8 +412,6 @@ class Agent:
                         "say 'run it' to continue"
                     )
                     return content
-                if not content and tool_used:
-                    return "(done - results in the observations above)"
                 return content
         except KeyboardInterrupt:
             self._patch_interrupted()
