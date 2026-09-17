@@ -342,13 +342,6 @@ class Agent:
                             }
                         )
                         continue
-                    if not tool_used:
-                        return roll_back(
-                            "model kept announcing steps without acting; "
-                            "rolled back this exchange. Tip: phrase it as a "
-                            "direct command, e.g. 'on kali219 run: "
-                            "ls /usr/share/wordlists'"
-                        )
                     if auto:
                         # never stall on a plan in auto mode: return the plan
                         # as the final answer instead of waiting for 'run it'
@@ -357,6 +350,13 @@ class Agent:
                             "multiple nudges - returning its plan"
                         )
                         return content
+                    if not tool_used:
+                        return roll_back(
+                            "model kept announcing steps without acting; "
+                            "rolled back this exchange. Tip: phrase it as a "
+                            "direct command, e.g. 'on kali219 run: "
+                            "ls /usr/share/wordlists'"
+                        )
                     # default mode mid-task: keep completed work, hand back
                     self.ui.on_status(
                         "model stopped after announcing next steps - "

@@ -516,7 +516,7 @@ def test_auto_mode_nudges_more_persistently(tmp_path):
             ]
         ]
         + [[Chunk(Delta(content="checked"))]]
-    ]
+    )
     agent, ui = make_agent(tmp_path, turns)
     ui.statuses = []
     ui.on_status = lambda text: ui.statuses.append(text)
@@ -547,7 +547,7 @@ def test_default_mode_hands_back_midtask_after_two(tmp_path):
             ]
         ]
         + [[Chunk(Delta(content="I will check the target now."))] for _ in range(3)]
-    ]
+    )
     agent, ui = make_agent(tmp_path, turns)
     ui.statuses = []
     ui.on_status = lambda text: ui.statuses.append(text)
