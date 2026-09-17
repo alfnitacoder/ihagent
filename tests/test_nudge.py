@@ -570,3 +570,79 @@ def test_auto_mode_beyond_limit_returns_plan(tmp_path):
 
     assert final == announce
     assert any("returning its plan" in s for s in ui.statuses)
+
+
+def test_auto_mode_catches_increase_timeout_announcement(tmp_path):
+    """Regression: 'I will increase the timeout and try again' must nudge in auto."""
+    turns = [
+        [
+            Chunk(
+                Delta(
+                    tool_calls=[
+                        ToolCallDelta(
+                            0,
+                            id="c1",
+                            name="ssh_run",
+                            arguments='{"host": "kali219", "command": "nmap sims.pn.cu"}',
+                        )
+                    ]
+                )
+            )
+        ],
+        # mid-task: timed out, announces retry with a verb not in the list
+        [
+            Chunk(
+                Delta(
+                    content=(
+                        "The scan timed out after 60 seconds. "
+                        "I will increase the timeout and try again."
+                    )
+                )
+            )
+        ],
+        # after nudge: retries properly with background mode
+        [
+            Chunk(
+                Delta(
+                    tool_calls=[
+                        ToolCallDelta(
+                            0,
+                            id="c2",
+                            name="ssh_run",
+                            arguments='{"host": "kali219", "command": "nmap sims.pn.cu", "background": true}',
+                        )
+                    ]
+                )
+            )
+        ],
+        [Chunk(Delta(content="Scan running in background - will report results."))],
+    ]
+    agent, ui = make_agent(tmp_path, turns)
+    ui.statuses = []
+    ui.on_status = lambda text: ui.statuses.append(text)
+    agent.config.approval = "auto"
+    final = agent.run("scan the sims")
+
+    assert "running in background" in final
+    assert len(ui.actions) == 2
+    assert sum("(auto)" in s for s in ui.statuses) == 1
+
+
+def test_default_mode_does_not_use_auto_intent_matching(tmp_path):
+    """Default mode keeps the old verb-matched behavior for this phrase."""
+    turns = [
+        [
+            Chunk(
+                Delta(
+                    content=(
+                        "The scan timed out after 60 seconds. "
+                        "I will increase the timeout and try again."
+                    )
+                )
+            )
+        ]
+    ]
+    agent, ui = make_agent(tmp_path, turns)
+    agent.config.approval = "default"
+    final = agent.run("scan the sims")
+    assert "increase the timeout" in final

@@ -28,6 +28,18 @@ SHORT_ANNOUNCE_RE = re.compile(
 )
 MAX_ANNOUNCE_CHARS = 240
 
+AUTO_INTENT_RE = re.compile(
+    r"(?:^|\n|[.,;:]\s)(?:i'll|i will|let's|let me|i am going to|we'll|we will)\b",
+    re.IGNORECASE,
+)
+
+AUTO_CONTINUE_NUDGE = (
+    "Continue the task with your tools if it is not complete - try another "
+    "approach on failure (longer timeout, background mode, different tool). "
+    "If the task IS complete, reply with a detailed final summary. Either "
+    "way, do not end on an announcement."
+)
+
 PROPOSE_PATTERN = re.compile(
     r"```(?:sh|bash|shell|console|terminal)\b"
     r"|(?:would you like me to|shall i|want me to|should i)\s+(?:run|execute|list|check|show)"
@@ -259,6 +271,7 @@ class Agent:
         self.messages.append({"role": "user", "content": user_input})
         nudges = {"fabrication": 0, "proposal": 0}
         tool_used = False
+        auto = self.config.approval == "auto"
 
         def roll_back(reason: str) -> str:
             """Discard the poisoned exchange so history stays clean."""
@@ -291,7 +304,12 @@ class Agent:
                         "model refuses to use its tools; rolled back this "
                         "exchange - try rephrasing or /clear"
                     )
-                proposing = bool(PROPOSE_PATTERN.search(content)) or (
+                intent = bool(PROPOSE_PATTERN.search(content))
+                if auto and not intent:
+                    # in auto mode ANY first-person intent phrase counts as
+                    # "not finished" - verb matching is too leaky
+                    intent = bool(AUTO_INTENT_RE.search(content))
+                proposing = intent or (
                     not tool_used
                     and len(content) <= MAX_ANNOUNCE_CHARS
                     and bool(SHORT_ANNOUNCE_RE.match(content))
@@ -322,7 +340,6 @@ class Agent:
                     )
                     continue
                 if proposing:
-                    auto = self.config.approval == "auto"
                     proposal_limit = 6 if auto else 2
                     if nudges["proposal"] < proposal_limit:
                         escalate = nudges["proposal"] >= 1
@@ -331,15 +348,16 @@ class Agent:
                             "model announced without acting - nudging it"
                             + (" (auto)" if auto else "")
                         )
+                        if escalate and auto:
+                            nudge = AUTO_CONTINUE_NUDGE
+                        elif escalate:
+                            nudge = PROPOSAL_NUDGE_ESCALATED.format(
+                                announcement=content.strip()[:300]
+                            )
+                        else:
+                            nudge = NUDGE_MESSAGE
                         self.messages.append(
-                            {
-                                "role": "user",
-                                "content": PROPOSAL_NUDGE_ESCALATED.format(
-                                    announcement=content.strip()[:300]
-                                )
-                                if escalate
-                                else NUDGE_MESSAGE,
-                            }
+                            {"role": "user", "content": nudge}
                         )
                         continue
                     if auto:
