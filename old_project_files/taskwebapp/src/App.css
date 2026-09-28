@@ -1,0 +1,74 @@
+.App {
+  max-width: 40rem;
+  margin: 0 auto;
+  padding: 2rem 1.25rem 3rem;
+  color: #1b1f24;
+}
+
+.App-header h1 {
+  margin: 0 0 0.35rem;
+  font-size: 1.75rem;
+}
+
+.lede {
+  margin: 0 0 1.5rem;
+  color: #5c6570;
+}
+
+.task-form {
+  display: flex;
+  gap: 0.5rem;
+  margin-bottom: 1.25rem;
+}
+
+.task-form input,
+.edit-input {
+  flex: 1;
+  padding: 0.55rem 0.7rem;
+  border: 1px solid #c5ccd4;
+  border-radius: 6px;
+  font: inherit;
+}
+
+.task-form button,
+.task-list button {
+  padding: 0.55rem 0.8rem;
+  border: 0;
+  border-radius: 6px;
+  background: #2563eb;
+  color: #fff;
+  font: inherit;
+  cursor: pointer;
+}
+
+.task-list button.danger {
+  background: #b42318;
+}
+
+.task-list {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+}
+
+.task-list li {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.65rem 0;
+  border-bottom: 1px solid #e6e9ee;
+}
+
+.task-text {
+  flex: 1;
+  cursor: text;
+}
+
+.task-list li.done .task-text {
+  text-decoration: line-through;
+  color: #7b8490;
+}
+
+.empty {
+  color: #5c6570;
+}

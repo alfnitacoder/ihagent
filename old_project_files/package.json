@@ -1,0 +1,16 @@
+{
+  "name": "hf",
+  "version": "1.0.0",
+  "description": "`hfagent` is a minimal, opencode-style CLI coding agent powered by Hugging Face Inference (OpenAI-compatible router). It is a hands-on companion to the [Hugging Face AI Agents Course](https://huggingface.co/learn/agents-course): it implements the course's core loop — **Thought → Action → Observation** — as a real tool-calling agent that can read, search, edit files and run commands in your project.",
+  "main": "index.js",
+  "directories": {
+    "test": "tests"
+  },
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs"
+}
