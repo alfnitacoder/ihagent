@@ -351,12 +351,40 @@ def _bare_json_calls(content: str) -> tuple[list[dict], str]:
     return calls, "".join(kept)
 
 
+def _shell_rules() -> str:
+    system = platform.system()
+    if system == "Windows":
+        return (
+            "This computer is Windows. run_command uses cmd or PowerShell "
+            "on THIS machine only. Do not run macOS or Linux commands "
+            "(ifconfig, ip addr, sw_vers, uname, hostname -I, "
+            "ipconfig getifaddr). Try one Windows command, read the result, "
+            "and stop. Do not repeat the question with another operating "
+            "system's command. For this computer's IP addresses, run "
+            "exactly: ipconfig"
+        )
+    if system == "Darwin":
+        return (
+            "This computer is macOS. run_command uses zsh on THIS machine "
+            "only. Do not run Linux or Windows commands (ip addr, "
+            "hostname -I, ipconfig /all, Get-NetIPAddress). Try one macOS "
+            "command, read the result, and stop. For this computer's IP "
+            "addresses, run exactly: ipconfig getifaddr en0"
+        )
+    return (
+        "This computer is Linux. run_command uses bash on THIS machine "
+        "only. Do not run macOS or Windows commands (sw_vers, ipconfig, "
+        "networksetup). Try one Linux command, read the result, and stop. "
+        "For this computer's IP addresses, run exactly: hostname -I"
+    )
+
+
 def system_prompt() -> str:
     env = (
         f"Environment: {platform.system()} {platform.release()}, "
         f"cwd={Path.cwd()}"
     )
-    parts = [env, SYSTEM_PROMPT]
+    parts = [env, _shell_rules(), SYSTEM_PROMPT]
     memory = load_memory().strip()
     if memory:
         parts.append(

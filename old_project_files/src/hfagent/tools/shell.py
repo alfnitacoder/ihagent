@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import platform
 import re
 import shlex
 import socket
@@ -40,6 +41,53 @@ def _guess_server_port(command: str) -> int | None:
         return 3000
     if "http.server" in lower:
         return 8000
+    return None
+
+
+def foreign_shell_reason(command: str, system: str | None = None) -> str | None:
+    """Reject commands written for a different operating system."""
+    system = system or platform.system()
+    text = command.strip()
+    unix_net = re.search(
+        r"(?:^|[;&|]\s*)(?:ifconfig|sw_vers|networksetup|scutil)\b"
+        r"|(?:^|[;&|]\s*)ip\s+(?:addr|route|link|a)\b"
+        r"|hostname\s+-I\b"
+        r"|ipconfig\s+getifaddr\b",
+        text,
+        re.IGNORECASE,
+    )
+    windows_only = re.search(
+        r"ipconfig\s+/all\b|Get-NetIPAddress\b",
+        text,
+        re.IGNORECASE,
+    )
+    if system == "Windows" and unix_net:
+        return (
+            "Error: this machine is Windows. Do not run macOS or Linux "
+            "commands. For this computer's IP addresses, run exactly: ipconfig"
+        )
+    if system == "Darwin" and (
+        re.search(r"(?:^|[;&|]\s*)ip\s+(?:addr|route|link|a)\b", text, re.IGNORECASE)
+        or re.search(r"hostname\s+-I\b", text)
+        or windows_only
+    ):
+        return (
+            "Error: this machine is macOS. Do not run Linux or Windows "
+            "commands. For this computer's IP addresses, run exactly: "
+            "ipconfig getifaddr en0"
+        )
+    if system == "Linux" and (
+        re.search(
+            r"(?:^|[;&|]\s*)(?:sw_vers|networksetup|ipconfig)\b",
+            text,
+            re.IGNORECASE,
+        )
+        or re.search(r"Get-NetIPAddress\b", text, re.IGNORECASE)
+    ):
+        return (
+            "Error: this machine is Linux. Do not run macOS or Windows "
+            "commands. For this computer's IP addresses, run exactly: hostname -I"
+        )
     return None
 
 
@@ -91,6 +139,9 @@ class RunCommand(Tool):
     def run(
         self, command: str, timeout: int = 60, background: bool = False
     ) -> str:
+        wrong_os = foreign_shell_reason(command)
+        if wrong_os:
+            return wrong_os
         if SERVER_START_RE.search(command):
             port = _guess_server_port(command)
             if port is not None and _port_listening(port):
