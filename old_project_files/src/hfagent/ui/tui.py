@@ -31,7 +31,7 @@ from textual.widgets import (
 
 from .. import COMPANY, PRODUCT, __version__
 from ..agent import Agent, AgentUI, format_api_error, is_stop_message
-from ..commands import dispatch_slash
+from ..commands import dispatch_slash, pasted_api_key
 from ..sessions import list_sessions, save_session
 
 MAX_OBS_CHARS = 1_200
@@ -44,6 +44,13 @@ NUDGE_PREFIXES = (
     "Your previous response was empty",
     "do it yourself now with a tool call",
 )
+
+
+def _history_line(text: str) -> str:
+    """Keep a pasted API key out of the up-arrow history."""
+    if pasted_api_key(text)[0]:
+        return "/model_api="
+    return text
 
 
 def is_internal_nudge(text: str) -> bool:
@@ -639,12 +646,18 @@ class HfAgentApp(App):
             return
         cfg = self.agent.config
         tools = ", ".join(self.agent.registry.names())
+        key_hint = ""
+        if not cfg.api_key and (
+            "ollama.com" in cfg.base_url or "huggingface.co" in cfg.base_url
+        ):
+            key_hint = "\npaste your cloud key as /model_api=..."
         banner = (
             f"{PRODUCT} v{__version__} — {COMPANY}\n"
             f"model: {cfg.model}\n"
             f"device: {self._device}    tokens: {self._prompt_tokens} in / {self._completion_tokens} out\n"
             f"tools: {tools}\n"
             "f2 chooses a model · while a task runs, type stop or add a note"
+            f"{key_hint}"
         )
         await chat.mount(Static(banner, markup=False, classes="system"))
 
@@ -884,7 +897,7 @@ class HfAgentApp(App):
             self.agent.steer(text)
             self.run_worker(partial(self._show_steer, text))
             return
-        composer.remember(text)
+        composer.remember(_history_line(text))
         composer.value = ""
         if text.startswith("/"):
             self.run_worker(partial(self._handle_slash, text))

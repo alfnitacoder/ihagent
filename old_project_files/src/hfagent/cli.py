@@ -93,7 +93,10 @@ def use_tui(
 
 
 def make_agent(
-    args: argparse.Namespace, ui: AgentUI | None = None
+    args: argparse.Namespace,
+    ui: AgentUI | None = None,
+    *,
+    require_key: bool = True,
 ) -> tuple[Agent, AgentUI]:
     try:
         config = Config.load(
@@ -114,17 +117,22 @@ def make_agent(
             "  - is a model installed?  (ollama list)\n"
             "  - or name one explicitly:  ihagent --ollama <model>"
         )
-    if not config.api_key and "huggingface.co" in config.base_url:
+    if require_key and not config.api_key and "huggingface.co" in config.base_url:
         sys.exit(
             "No API key found.\n"
-            "  export HF_TOKEN=hf_...\n"
+            "  start ihagent and paste:  /model_api=...\n"
+            "  or: export HF_TOKEN=hf_...\n"
             "  (create one at https://huggingface.co/settings/tokens)"
         )
-    if not config.api_key and "ollama.com" in config.base_url:
+    if (
+        require_key
+        and not config.api_key
+        and "ollama.com" in config.base_url
+    ):
         sys.exit(
             "No Ollama API key found.\n"
-            "  put OLLAMA_API_KEY=... in .env\n"
-            "  or: export OLLAMA_API_KEY=...\n"
+            "  start ihagent and paste:  /model_api=...\n"
+            "  or put OLLAMA_API_KEY=... in .env\n"
             "  (create one at https://ollama.com/settings/keys)"
         )
     ui = ui or ConsoleUI()
@@ -172,7 +180,7 @@ def main(argv: list[str] | None = None) -> None:
         print(__version__)
         return
     if use_tui(args):
-        agent, _ = make_agent(args, ui=AgentUI())
+        agent, _ = make_agent(args, ui=AgentUI(), require_key=False)
         if args.resume:
             messages = load_session(args.resume)
             if not messages:
@@ -188,7 +196,7 @@ def main(argv: list[str] | None = None) -> None:
             )
         run_tui(agent)
         return
-    agent, ui = make_agent(args)
+    agent, ui = make_agent(args, require_key=bool(args.prompt))
     if args.resume:
         handle_resume(agent, ui, args.resume)
     if args.prompt:

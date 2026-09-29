@@ -52,6 +52,36 @@ def test_clear_and_unknown():
     assert "unknown command" in ui.system[-1]
 
 
+def test_model_api_saves_key_without_echoing(monkeypatch, tmp_path):
+    path = tmp_path / ".env"
+    path.write_text(
+        "HF_BASE_URL=https://ollama.com/v1\n# OLLAMA_API_KEY=commented\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr("hfagent.config.project_env_path", lambda: path)
+    agent = _agent()
+    agent.config.base_url = "https://ollama.com/v1"
+    ui = Recorder()
+    secret = "cloud-key-example-1234"
+    assert dispatch_slash(agent, ui, f"/model_api={secret}") == "handled"
+    blob = "\n".join(ui.status + ui.system + ui.errors)
+    assert secret not in blob
+    assert ui.status[-1] == "api key saved"
+    assert agent.config.api_key == secret
+    assert agent.client.api_key == secret
+    text = path.read_text(encoding="utf-8")
+    assert f"OLLAMA_API_KEY={secret}" in text
+    assert "# OLLAMA_API_KEY=commented" in text
+
+
+def test_model_api_rejects_empty():
+    agent = _agent()
+    ui = Recorder()
+    dispatch_slash(agent, ui, "/model_api=")
+    assert ui.status[-1] == "paste the key as /model_api=..."
+    assert agent.config.api_key == "none"
+
+
 def test_approval_toggle():
     agent = _agent()
     ui = Recorder()

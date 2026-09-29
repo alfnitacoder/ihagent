@@ -70,25 +70,43 @@ def project_env_path() -> Path:
     return cwd
 
 
-def save_selected_model(model: str, path: Path | None = None) -> Path:
-    """Remember the chosen model in the project .env."""
+def _set_env_line(name: str, value: str, path: Path | None = None) -> Path:
+    """Replace the first active KEY= line, or append it. Commented lines stay."""
     path = path or project_env_path()
     lines = path.read_text(encoding="utf-8").splitlines() if path.is_file() else []
+    prefix = f"{name}="
     replaced = False
     out: list[str] = []
     for line in lines:
-        if not replaced and line.strip().startswith("HFAGENT_MODEL="):
-            out.append(f"HFAGENT_MODEL={model}")
+        if not replaced and line.strip().startswith(prefix):
+            out.append(f"{name}={value}")
             replaced = True
         else:
             out.append(line)
     if not replaced:
         if out and out[-1] != "":
             out.append("")
-        out.append(f"HFAGENT_MODEL={model}")
+        out.append(f"{name}={value}")
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text("\n".join(out).rstrip() + "\n", encoding="utf-8")
     return path
+
+
+def save_selected_model(model: str, path: Path | None = None) -> Path:
+    """Remember the chosen model in the project .env."""
+    return _set_env_line("HFAGENT_MODEL", model, path)
+
+
+def env_name_for_api_key(base_url: str) -> str:
+    """Which .env variable holds the key for this host."""
+    if "huggingface.co" in base_url:
+        return "HF_TOKEN"
+    return "OLLAMA_API_KEY"
+
+
+def save_api_key(key: str, base_url: str, path: Path | None = None) -> Path:
+    """Remember an API key in the project .env. Does not print the key."""
+    return _set_env_line(env_name_for_api_key(base_url), key, path)
 
 
 def names_from_model_payload(payload: object) -> list[str]:
