@@ -20,6 +20,16 @@ function Write-Step([string]$Message) {
     Write-Host "==> $Message"
 }
 
+function Test-Python([string]$File, [string[]]$Args) {
+    try {
+        $ver = & $File @($Args + @("-c", "import sys; print(f'{sys.version_info[0]}.{sys.version_info[1]}'); raise SystemExit(0 if sys.version_info >= (3, 10) else 1)"))
+        if ($LASTEXITCODE -eq 0) {
+            return @{ File = $File; Args = $Args; Version = ($ver | Select-Object -Last 1) }
+        }
+    } catch { }
+    return $null
+}
+
 function Find-Python {
     $candidates = @(
         @{ File = "py"; Args = @("-3") },
@@ -28,16 +38,43 @@ function Find-Python {
     )
     foreach ($c in $candidates) {
         if (-not (Get-Command $c.File -ErrorAction SilentlyContinue)) { continue }
-        try {
-            $ver = & $c.File @($c.Args + @("-c", "import sys; print(f'{sys.version_info[0]}.{sys.version_info[1]}'); raise SystemExit(0 if sys.version_info >= (3, 10) else 1)"))
-            if ($LASTEXITCODE -eq 0) {
-                return @{ File = $c.File; Args = $c.Args; Version = ($ver | Select-Object -Last 1) }
+        $found = Test-Python $c.File $c.Args
+        if ($found) { return $found }
+    }
+    $roots = @(
+        "$env:LOCALAPPDATA\Programs\Python",
+        "$env:ProgramFiles\Python",
+        ${env:ProgramFiles(x86)}
+    )
+    foreach ($root in $roots) {
+        if (-not (Test-Path $root)) { continue }
+        $exes = Get-ChildItem -Path $root -Filter python.exe -Recurse -ErrorAction SilentlyContinue |
+            Sort-Object FullName -Descending
+        foreach ($exe in $exes) {
+            $found = Test-Python $exe.FullName @()
+            if ($found) {
+                $env:Path = "$(Split-Path $exe.FullName);$env:Path"
+                return $found
             }
-        } catch {
-            continue
         }
     }
-    throw "Python 3.10+ is required. Install from https://www.python.org/downloads/ and tick 'Add python.exe to PATH'."
+    return $null
+}
+
+function Install-Python {
+    $found = Find-Python
+    if ($found) { return $found }
+    Write-Step "Installing Python 3.12"
+    if (-not (Get-Command winget -ErrorAction SilentlyContinue)) {
+        throw "Python 3.10+ is required. Install from https://www.python.org/downloads/ and tick 'Add python.exe to PATH'."
+    }
+    winget install -e --id Python.Python.3.12 --accept-package-agreements --accept-source-agreements
+    Refresh-Path
+    $found = Find-Python
+    if (-not $found) {
+        throw "Python installed, but this window cannot see it yet. Close PowerShell, open a new window, and run this script again."
+    }
+    return $found
 }
 
 function Refresh-Path {
@@ -139,7 +176,7 @@ if (-not (Test-Path (Join-Path $Root "pyproject.toml"))) {
     throw "This script must live in the IHAgent project (missing pyproject.toml)."
 }
 
-$py = Find-Python
+$py = Install-Python
 Write-Step "Using $($py.File) $($py.Version)"
 Install-Ollama
 Ensure-OllamaRunning
