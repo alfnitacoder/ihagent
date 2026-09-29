@@ -64,6 +64,36 @@ def list_sessions(cwd: str | None = None, limit: int = 10) -> list[dict]:
     return out
 
 
+def delete_session(name: str = "last", cwd: str | None = None) -> str | None:
+    """Delete one saved session, or every session for this folder when name is 'all'.
+
+    Returns a short status phrase, or None when nothing matched.
+    """
+    if "/" in name or "\\" in name or name.startswith("."):
+        return None
+    directory = session_dir(cwd)
+    if name == "all":
+        paths = list(directory.glob("*.json"))
+        for path in paths:
+            path.unlink(missing_ok=True)
+        if not paths:
+            return None
+        count = len(paths)
+        return f"{count} session" if count == 1 else f"{count} sessions"
+    path = directory / f"{name}.json"
+    if name == "last" or not path.exists():
+        if name != "last":
+            return None
+        sessions = list_sessions(cwd, limit=1)
+        if not sessions:
+            return None
+        path = Path(sessions[0]["path"])
+    if not path.is_file():
+        return None
+    path.unlink()
+    return path.stem
+
+
 def load_session(name: str, cwd: str | None = None) -> list[dict] | None:
     """Load a session by stem name; 'last' picks the most recent one."""
     directory = session_dir(cwd)

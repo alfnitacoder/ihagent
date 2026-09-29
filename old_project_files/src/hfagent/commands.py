@@ -19,7 +19,7 @@ from .config import (
     save_selected_model,
 )
 from .memory import clear_memory, load_memory
-from .sessions import list_sessions, load_session
+from .sessions import delete_session, list_sessions, load_session
 from .skills import skills_index
 
 HELP = """\
@@ -35,6 +35,7 @@ HELP = """\
 /model <name|#| > switch model (name, unique part, or list number)
 /model_api=<key>  paste an Ollama Cloud or Hugging Face key (saved, not shown)
 /sessions         list saved sessions
+/delete [name]    delete a saved session ('last' if no name, or 'all')
 /resume [name]    load a saved session ('last' if no name given)
 /clear            reset the conversation
 /exit, /quit      leave the agent
@@ -122,6 +123,14 @@ def dispatch_slash(agent: Agent, ui: AgentUI, line: str) -> SlashResult:
         agent.reset()
         ui.on_status("conversation cleared")
         return "clear"
+
+    if command == "/delete":
+        removed = delete_session(arg or "last")
+        if removed is None:
+            ui.on_error("session not found")
+        else:
+            ui.on_status(f"deleted {removed}")
+        return "handled"
 
     if command == "/sessions":
         sessions = list_sessions()

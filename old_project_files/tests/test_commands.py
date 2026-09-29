@@ -1,5 +1,7 @@
 """Slash-command dispatcher used by both the REPL and the TUI."""
 
+import os
+
 from hfagent.agent import Agent, AgentUI
 from hfagent.commands import HELP, dispatch_slash
 from hfagent.config import Config
@@ -119,6 +121,48 @@ def test_cloud_and_local_switch_from_the_prompt(monkeypatch, tmp_path):
     text = path.read_text(encoding="utf-8")
     assert "HF_BASE_URL=https://ollama.com/v1" in text
     assert "HFAGENT_LOCAL_MODEL=qwen3:8b" in text
+
+
+def test_delete_session(monkeypatch, tmp_path):
+    from hfagent.sessions import _slug
+
+    root = tmp_path / "sessions"
+    monkeypatch.setattr("hfagent.sessions.SESSIONS_ROOT", root)
+    folder = root / _slug(os.getcwd())
+    folder.mkdir(parents=True)
+    older = folder / "20260101-000001.json"
+    newer = folder / "20260101-000002.json"
+    body = '{"model": "m", "messages": [{"role": "user", "content": "hi"}]}'
+    older.write_text(body, encoding="utf-8")
+    newer.write_text(body, encoding="utf-8")
+    agent = _agent()
+    ui = Recorder()
+    assert dispatch_slash(agent, ui, f"/delete {newer.stem}") == "handled"
+    assert not newer.exists()
+    assert older.exists()
+    assert newer.stem in ui.status[-1]
+    assert dispatch_slash(agent, ui, "/delete") == "handled"
+    assert not older.exists()
+    assert dispatch_slash(agent, ui, "/delete") == "handled"
+    assert ui.errors[-1] == "session not found"
+
+
+def test_delete_all_sessions(monkeypatch, tmp_path):
+    from hfagent.sessions import _slug
+
+    root = tmp_path / "sessions"
+    monkeypatch.setattr("hfagent.sessions.SESSIONS_ROOT", root)
+    folder = root / _slug(os.getcwd())
+    folder.mkdir(parents=True)
+    body = '{"model": "m", "messages": [{"role": "user", "content": "hi"}]}'
+    (folder / "20260101-000001.json").write_text(body, encoding="utf-8")
+    (folder / "20260101-000002.json").write_text(body, encoding="utf-8")
+    agent = _agent()
+    ui = Recorder()
+    assert dispatch_slash(agent, ui, "/delete all") == "handled"
+    assert "2 sessions" in ui.status[-1]
+    assert dispatch_slash(agent, ui, "/sessions") == "handled"
+    assert "no saved sessions" in ui.system[-1]
 
 
 def test_approval_toggle():
