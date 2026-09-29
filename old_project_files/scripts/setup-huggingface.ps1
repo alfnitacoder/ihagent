@@ -20,7 +20,7 @@ function Write-Step([string]$Message) {
 }
 
 if (-not (Get-Command hf -ErrorAction SilentlyContinue)) {
-    throw "Install the Hub CLI first: https://huggingface.co/docs/huggingface_hub/en/guides/cli"
+    throw "This script is for the Hugging Face cloud, not local Ollama. For Ollama run: powershell -ExecutionPolicy Bypass -File .\scripts\configure-ollama.ps1"
 }
 
 try {
