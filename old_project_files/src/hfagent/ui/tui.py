@@ -179,6 +179,14 @@ class TurnDone(Message):
     pass
 
 
+class RuntimeMsg(Message):
+    def __init__(self, device: str, prompt_tokens: int, completion_tokens: int) -> None:
+        super().__init__()
+        self.device = device
+        self.prompt_tokens = prompt_tokens
+        self.completion_tokens = completion_tokens
+
+
 class TuiBridge(AgentUI):
     """AgentUI that posts thread-safe messages onto the Textual app."""
 
@@ -205,6 +213,9 @@ class TuiBridge(AgentUI):
 
     def on_system(self, text: str) -> None:
         self.app.post_message(SystemMsg(text))
+
+    def on_runtime(self, device: str, prompt_tokens: int, completion_tokens: int) -> None:
+        self.app.post_message(RuntimeMsg(device, prompt_tokens, completion_tokens))
 
     def approve(
         self, tool_name: str, arguments: dict, preview: str | None = None
@@ -482,6 +493,9 @@ class HfAgentApp(App):
         self._stream_widget: Markdown | None = None
         self._last_assistant_text = ""
         self._approval_queue: queue.Queue[bool] | None = None
+        self._device = "…"
+        self._prompt_tokens = 0
+        self._completion_tokens = 0
 
     def compose(self) -> ComposeResult:
         yield Static(id="header-bar")
@@ -510,6 +524,18 @@ class HfAgentApp(App):
         await self._mount_banner()
         await self.replay_history()
         self.query_one(Composer).focus()
+        self.run_worker(self._probe_device, thread=True, exclusive=False)
+
+    def _probe_device(self) -> None:
+        from ..runtime import infer_device
+
+        device = infer_device(self.agent.config.base_url, self.agent.config.model)
+        if not device:
+            return
+        self.agent.device = device
+        self.post_message(
+            RuntimeMsg(device, self._prompt_tokens, self._completion_tokens)
+        )
 
     def on_unmount(self) -> None:
         if self._approval_queue is not None:
@@ -523,7 +549,9 @@ class HfAgentApp(App):
         cwd = Path.cwd().name or str(Path.cwd())
         busy = "  ·  thinking" if self._busy else ""
         self.query_one("#header-bar", Static).update(
-            f"{PRODUCT} v{__version__}   {cfg.model}  ·  {cfg.approval}  ·  {cwd}{busy}"
+            f"{PRODUCT} v{__version__}   {self._device}   "
+            f"{self._prompt_tokens} in / {self._completion_tokens} out   "
+            f"{cfg.model}  ·  {cfg.approval}  ·  {cwd}{busy}"
         )
 
     async def refresh_sessions(self) -> None:
@@ -544,6 +572,7 @@ class HfAgentApp(App):
         banner = (
             f"{PRODUCT} v{__version__} — {COMPANY}\n"
             f"model: {cfg.model}\n"
+            f"device: {self._device}    tokens: {self._prompt_tokens} in / {self._completion_tokens} out\n"
             f"tools: {tools}\n"
             "type /help for commands · while a task runs, type stop or add a note"
         )
@@ -833,6 +862,12 @@ class HfAgentApp(App):
 
     async def on_status_msg(self, event: StatusMsg) -> None:
         self.set_status(event.text)
+
+    def on_runtime_msg(self, event: RuntimeMsg) -> None:
+        self._device = event.device or "…"
+        self._prompt_tokens = event.prompt_tokens
+        self._completion_tokens = event.completion_tokens
+        self.refresh_header()
 
     async def on_delta_msg(self, event: DeltaMsg) -> None:
         if not event.text:

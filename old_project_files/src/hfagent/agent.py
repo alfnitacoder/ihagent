@@ -21,6 +21,7 @@ from openai import OpenAI
 from .config import Config
 from .memory import load_memory
 from .prompts import SYSTEM_PROMPT
+from .runtime import infer_device
 from .skills import format_skills_for_prompt
 from .tools import ToolRegistry
 
@@ -411,6 +412,9 @@ class AgentUI:
         """Long-form info (/help, /memory, /sessions). Defaults to status."""
         self.on_status(text)
 
+    def on_runtime(self, device: str, prompt_tokens: int, completion_tokens: int) -> None:
+        """GPU/CPU and token counts for the latest model call."""
+
     def approve(
         self, tool_name: str, arguments: dict, preview: str | None = None
     ) -> bool:
@@ -433,6 +437,9 @@ class Agent:
         ]
         self._native_tools = True
         self._inbox: queue.Queue[str] = queue.Queue()
+        self.device = "…"
+        self.prompt_tokens = 0
+        self.completion_tokens = 0
 
     def steer(self, text: str) -> None:
         """Queue a chat message while a turn is already running."""
@@ -813,16 +820,23 @@ class Agent:
             cleaned.append(m)
         return cleaned
 
-    def _create_completion(self, *, tools: bool):
+    def _create_completion(self, *, tools: bool, include_usage: bool = True):
         kwargs: dict[str, Any] = {
             "model": self.config.model,
             "messages": self._sanitize_messages(self.messages),
             "stream": True,
             "temperature": self.config.temperature,
         }
+        if include_usage:
+            kwargs["stream_options"] = {"include_usage": True}
         if tools:
             kwargs["tools"] = self.registry.specs()
-        return self.client.chat.completions.create(**kwargs)
+        try:
+            return self.client.chat.completions.create(**kwargs)
+        except Exception as exc:
+            if include_usage and "stream_options" in str(exc).lower():
+                return self._create_completion(tools=tools, include_usage=False)
+            raise
 
     def _open_stream(self):
         """Stream a turn; fall back if the server cannot do native tools."""
@@ -844,7 +858,13 @@ class Agent:
         tool_calls: dict[int, dict[str, str]] = {}
 
         stream = self._open_stream()
+        prompt_tokens = 0
+        completion_tokens = 0
         for chunk in stream:
+            usage = getattr(chunk, "usage", None)
+            if usage is not None:
+                prompt_tokens = int(getattr(usage, "prompt_tokens", 0) or 0)
+                completion_tokens = int(getattr(usage, "completion_tokens", 0) or 0)
             if not chunk.choices:
                 continue
             delta = chunk.choices[0].delta
@@ -866,6 +886,7 @@ class Agent:
                     slot["arguments"] += tc.function.arguments
 
         content = "".join(content_parts)
+        self._report_runtime(prompt_tokens, completion_tokens)
 
         ordered = [tool_calls[i] for i in sorted(tool_calls)]
         if not ordered and content:
@@ -910,6 +931,15 @@ class Agent:
                 {"role": "tool", "tool_call_id": call["id"], "content": result}
             )
         return message
+
+    def _report_runtime(self, prompt_tokens: int, completion_tokens: int) -> None:
+        device = infer_device(self.config.base_url, self.config.model)
+        if device:
+            self.device = device
+        if prompt_tokens or completion_tokens:
+            self.prompt_tokens = prompt_tokens
+            self.completion_tokens = completion_tokens
+        self.ui.on_runtime(self.device, self.prompt_tokens, self.completion_tokens)
 
     def _execute(self, call: dict[str, Any]) -> str:
         name = call["function"]["name"]

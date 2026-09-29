@@ -33,8 +33,17 @@ class ConsoleUI(AgentUI):
             style="dim",
         )
         c.print(f"tools: {', '.join(tools)}", style="dim")
+        c.print("device: …    tokens: 0 in / 0 out", style="dim")
         c.print("type /help for commands, /exit to quit", style="dim")
         c.print()
+
+    def on_runtime(self, device: str, prompt_tokens: int, completion_tokens: int) -> None:
+        self.console.print(
+            f"{device}    tokens: {prompt_tokens} in / {completion_tokens} out",
+            style="dim",
+            markup=False,
+            highlight=False,
+        )
 
     def on_status(self, text: str) -> None:
         # markup=False: dynamic text may contain [brackets] (sed, tags...)
