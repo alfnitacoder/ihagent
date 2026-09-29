@@ -25,6 +25,7 @@ HELP = """\
 /exit, /quit      leave the agent
 
 TUI keys: drag to copy · ctrl+shift+c copy · ctrl+b sidebar · ctrl+l clear · ctrl+q quit · up/down history
+While a task runs: type a note and it is picked up on the next step. Type stop to cancel.
 Classic line REPL: ihagent --console
 """
 

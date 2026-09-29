@@ -145,6 +145,31 @@ def test_tui_copies_chat_selection(monkeypatch):
     asyncio.run(scenario())
 
 
+def test_tui_note_and_stop_while_busy():
+    app = HfAgentApp(_agent())
+
+    async def scenario():
+        async with app.run_test(size=(100, 30)) as pilot:
+            app._busy = True
+            composer = app.query_one("#composer", Composer)
+            composer.value = "check the tests too"
+            await composer.action_submit()
+            await app.workers.wait_for_complete()
+            await pilot.pause()
+            assert app.agent._inbox.get_nowait() == "check the tests too"
+            assert any("check the tests too" in body for body in _chat_contents(app, "user"))
+            assert app._busy
+
+            composer.value = "stop"
+            await composer.action_submit()
+            await app.workers.wait_for_complete()
+            await pilot.pause()
+            assert app.agent._inbox.get_nowait() == "stop"
+            assert any("stop" in body for body in _chat_contents(app, "user"))
+
+    asyncio.run(scenario())
+
+
 def test_tui_sidebar_toggle_and_tools():
     app = HfAgentApp(_agent())
 

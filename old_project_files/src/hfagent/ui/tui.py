@@ -30,7 +30,7 @@ from textual.widgets import (
 )
 
 from .. import COMPANY, PRODUCT, __version__
-from ..agent import Agent, AgentUI, format_api_error
+from ..agent import Agent, AgentUI, format_api_error, is_stop_message
 from ..commands import dispatch_slash
 from ..sessions import list_sessions, save_session
 
@@ -545,7 +545,7 @@ class HfAgentApp(App):
             f"{PRODUCT} v{__version__} — {COMPANY}\n"
             f"model: {cfg.model}\n"
             f"tools: {tools}\n"
-            "type /help for commands · ctrl+b toggles the sidebar"
+            "type /help for commands · while a task runs, type stop or add a note"
         )
         await chat.mount(Static(banner, markup=False, classes="system"))
 
@@ -744,7 +744,13 @@ class HfAgentApp(App):
         if not text:
             return
         if self._busy:
-            self.set_status("still working — wait for the current turn")
+            if text.startswith("/") and not is_stop_message(text):
+                self.set_status("still working — type a note, or stop")
+                return
+            composer.remember(text)
+            composer.value = ""
+            self.agent.steer(text)
+            self.run_worker(partial(self._show_steer, text))
             return
         composer.remember(text)
         composer.value = ""
@@ -752,6 +758,13 @@ class HfAgentApp(App):
             self.run_worker(partial(self._handle_slash, text))
             return
         self.run_worker(partial(self._submit_turn, text))
+
+    async def _show_steer(self, text: str) -> None:
+        await self.mount_user(text)
+        if is_stop_message(text):
+            self.set_status("stopping after this step")
+        else:
+            self.set_status("noted — it will read this and continue")
 
     async def _submit_turn(self, text: str) -> None:
         await self.mount_user(text)
@@ -772,7 +785,8 @@ class HfAgentApp(App):
     def _start_turn(self, prompt: str) -> None:
         self._busy = True
         self.refresh_header()
-        self.set_status("thinking…")
+        self.set_status("thinking…  (you can still type)")
+        self.query_one(Composer).placeholder = "Add a note, or type stop"
         self.run_worker(
             partial(self._run_turn, prompt),
             thread=True,
@@ -866,7 +880,9 @@ class HfAgentApp(App):
     async def on_turn_done(self, event: TurnDone) -> None:
         self._busy = False
         self.refresh_header()
-        if self.query_one("#status", Static).content == "thinking…":
+        self.query_one(Composer).placeholder = f"Message {PRODUCT}…  /help"
+        status = str(self.query_one("#status", Static).content)
+        if status.startswith("thinking") or status.startswith("noted") or status.startswith("stopping") or status.startswith("got your message"):
             self.set_status("ready")
         await self.refresh_sessions()
         self.query_one(Composer).focus()

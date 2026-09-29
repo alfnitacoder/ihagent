@@ -288,6 +288,71 @@ def test_repeated_failing_tool_gets_hint_and_nudge(tmp_path):
     )
 
 
+def test_mid_task_note_is_read_before_the_next_step(tmp_path):
+    turns = [
+        [
+            Chunk(
+                Delta(
+                    tool_calls=[
+                        ToolCallDelta(
+                            0,
+                            id="call_1",
+                            name="list_dir",
+                            arguments=json.dumps({"path": str(tmp_path)}),
+                        )
+                    ]
+                )
+            )
+        ],
+        [Chunk(Delta(content="added the note"))],
+    ]
+    agent, ui = make_agent(tmp_path, turns)
+    real_execute = agent._execute
+
+    def execute(call):
+        agent.steer("also mention the license")
+        return real_execute(call)
+
+    agent._execute = execute
+    final = agent.run("list this directory")
+    assert final == "added the note"
+    sent = json.dumps(agent.client.chat.completions.calls[1]["messages"])
+    assert "also mention the license" in sent
+    assert any("continuing with it" in s for s in ui.statuses)
+
+
+def test_mid_task_stop_ends_the_turn(tmp_path):
+    turns = [
+        [
+            Chunk(
+                Delta(
+                    tool_calls=[
+                        ToolCallDelta(
+                            0,
+                            id="call_1",
+                            name="list_dir",
+                            arguments=json.dumps({"path": str(tmp_path)}),
+                        )
+                    ]
+                )
+            )
+        ],
+        [Chunk(Delta(content="should not run"))],
+    ]
+    agent, ui = make_agent(tmp_path, turns)
+    real_execute = agent._execute
+
+    def execute(call):
+        agent.steer("stop")
+        return real_execute(call)
+
+    agent._execute = execute
+    final = agent.run("list this directory")
+    assert final == ""
+    assert any(e == "stopped" for e in ui.errors)
+    assert len(agent.client.chat.completions.calls) == 1
+
+
 def test_repeated_failing_tool_rolls_back_after_five(tmp_path):
     missing = str(tmp_path / "gone.js")
 

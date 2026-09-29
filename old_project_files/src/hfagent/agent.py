@@ -11,6 +11,7 @@ from __future__ import annotations
 import json
 import os
 import platform
+import queue
 from pathlib import Path
 import re
 from typing import Any
@@ -30,6 +31,16 @@ SHORT_ANNOUNCE_RE = re.compile(
     re.IGNORECASE,
 )
 MAX_ANNOUNCE_CHARS = 240
+
+# Mid-task chat. Exact phrases only, so "don't stop yet" is extra info.
+STOP_MESSAGE_RE = re.compile(
+    r"^(?:/stop|stop|stop task|stop the task|cancel|abort|halt)[.!]?$",
+    re.IGNORECASE,
+)
+
+
+def is_stop_message(text: str) -> bool:
+    return bool(STOP_MESSAGE_RE.match(text.strip()))
 
 # First-person future/intent openers. Used in --approval auto so GGUFs that
 # narrate "I will …" / "I'm going to …" without a tool call get nudged hard.
@@ -393,6 +404,47 @@ class Agent:
             {"role": "system", "content": system_prompt()}
         ]
         self._native_tools = True
+        self._inbox: queue.Queue[str] = queue.Queue()
+
+    def steer(self, text: str) -> None:
+        """Queue a chat message while a turn is already running."""
+        cleaned = text.strip()
+        if cleaned:
+            self._inbox.put(cleaned)
+
+    def _consume_steer(self) -> str:
+        """Fold queued chat into the conversation.
+
+        Returns ``stop``, ``note``, or ``""`` when the inbox was empty.
+        """
+        kind = ""
+        while True:
+            try:
+                text = self._inbox.get_nowait().strip()
+            except queue.Empty:
+                return kind
+            if is_stop_message(text):
+                self._discard_inbox()
+                return "stop"
+            self.messages.append(
+                {
+                    "role": "user",
+                    "content": (
+                        "The user paused you mid-task and added this. "
+                        "Read it, adjust what you are doing, then continue "
+                        "with your tools. Do not ignore it.\n\n" + text
+                    ),
+                }
+            )
+            self.ui.on_status("got your message — continuing with it")
+            kind = "note"
+
+    def _discard_inbox(self) -> None:
+        while True:
+            try:
+                self._inbox.get_nowait()
+            except queue.Empty:
+                return
 
     # ------------------------------------------------------------------ state
 
@@ -439,8 +491,23 @@ class Agent:
             del self.messages[rollback_marker:]
             self.ui.on_error(reason)
             return ""
+        def finish(content: str) -> str | None:
+            """End the turn, unless the user just added a mid-task note."""
+            kind = self._consume_steer()
+            if kind == "stop":
+                self._patch_interrupted()
+                self.ui.on_error("stopped")
+                return ""
+            if kind == "note":
+                return None
+            return content
+
         try:
             for _step in range(self.config.max_steps):
+                if self._consume_steer() == "stop":
+                    self._patch_interrupted()
+                    self.ui.on_error("stopped")
+                    return ""
                 message = self._step()
                 if message.get("tool_calls"):
                     tool_used = True
@@ -552,7 +619,10 @@ class Agent:
                         self.ui.on_status(
                             "empty after tools - finishing with observations"
                         )
-                        return "(done - results in the observations above)"
+                        done = finish("(done - results in the observations above)")
+                        if done is None:
+                            continue
+                        return done
                     if nudges["empty"] < 2:
                         nudges["empty"] += 1
                         self.ui.on_status(
@@ -616,7 +686,10 @@ class Agent:
                         self.ui.on_status(
                             "post-tool announce after nudge - accepting as summary"
                         )
-                        return content
+                        done = finish(content)
+                        if done is None:
+                            continue
+                        return done
                     proposal_limit = (10 if tool_used else 6) if auto else 2
                     if nudges["proposal"] < proposal_limit:
                         nudges["proposal"] += 1
@@ -662,7 +735,10 @@ class Agent:
                             "model kept announcing without acting after "
                             "multiple nudges - returning its plan"
                         )
-                        return content
+                        done = finish(content)
+                        if done is None:
+                            continue
+                        return done
                     if not tool_used:
                         return roll_back(
                             "model kept announcing steps without acting; "
@@ -675,8 +751,14 @@ class Agent:
                         "model stopped after announcing next steps - "
                         "say 'run it' to continue"
                     )
-                    return content
-                return content
+                    done = finish(content)
+                    if done is None:
+                        continue
+                    return done
+                done = finish(content)
+                if done is None:
+                    continue
+                return done
         except KeyboardInterrupt:
             self._patch_interrupted()
             self.ui.on_error("interrupted by user")
