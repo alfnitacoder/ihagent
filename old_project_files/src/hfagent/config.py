@@ -97,6 +97,40 @@ def save_selected_model(model: str, path: Path | None = None) -> Path:
     return _set_env_line("HFAGENT_MODEL", model, path)
 
 
+def save_base_url(base_url: str, path: Path | None = None) -> Path:
+    """Remember the active host in the project .env."""
+    return _set_env_line("HF_BASE_URL", base_url, path)
+
+
+def host_label(base_url: str) -> str:
+    """Short name for the header: cloud, local, router, gpu, or custom."""
+    if "11434" in base_url:
+        return "local"
+    if "ollama.com" in base_url:
+        return "cloud"
+    if "endpoints.huggingface.cloud" in base_url:
+        return "gpu"
+    if "huggingface.co" in base_url:
+        return "router"
+    return "custom"
+
+
+def host_model_env(kind: str) -> str:
+    if kind == "cloud":
+        return "HFAGENT_CLOUD_MODEL"
+    if kind == "local":
+        return "HFAGENT_LOCAL_MODEL"
+    return ""
+
+
+def save_host_model(kind: str, model: str, path: Path | None = None) -> Path | None:
+    """Remember the last model used on cloud or local."""
+    name = host_model_env(kind)
+    if not name:
+        return None
+    return _set_env_line(name, model, path)
+
+
 def env_name_for_api_key(base_url: str) -> str:
     """Which .env variable holds the key for this host."""
     if "huggingface.co" in base_url:

@@ -32,6 +32,7 @@ from textual.widgets import (
 from .. import COMPANY, PRODUCT, __version__
 from ..agent import Agent, AgentUI, format_api_error, is_stop_message
 from ..commands import dispatch_slash, pasted_api_key
+from ..config import host_label
 from ..sessions import list_sessions, save_session
 
 MAX_OBS_CHARS = 1_200
@@ -626,7 +627,7 @@ class HfAgentApp(App):
         cwd = Path.cwd().name or str(Path.cwd())
         busy = "  ·  thinking" if self._busy else ""
         self.query_one("#header-bar", Static).update(
-            f"{PRODUCT} v{__version__}   {self._device}   "
+            f"{PRODUCT} v{__version__}   {host_label(cfg.base_url)}   {self._device}   "
             f"{self._prompt_tokens} in / {self._completion_tokens} out   "
             f"{cfg.model}  ·  {cfg.approval}  ·  {cwd}{busy}"
         )
@@ -656,7 +657,7 @@ class HfAgentApp(App):
             f"model: {cfg.model}\n"
             f"device: {self._device}    tokens: {self._prompt_tokens} in / {self._completion_tokens} out\n"
             f"tools: {tools}\n"
-            "f2 chooses a model · while a task runs, type stop or add a note"
+            "/cloud or /local switches host · f2 chooses a model · type stop or add a note while a task runs"
             f"{key_hint}"
         )
         await chat.mount(Static(banner, markup=False, classes="system"))
@@ -917,6 +918,10 @@ class HfAgentApp(App):
 
     async def _handle_slash(self, text: str) -> None:
         result = dispatch_slash(self.agent, self.agent.ui, text)
+        command = text.split(maxsplit=1)[0].lower()
+        if command in ("/cloud", "/local", "/host"):
+            self._device = "…"
+            self.run_worker(self._probe_device, thread=True, exclusive=False)
         self.refresh_header()
         await self.refresh_sessions()
         if result == "exit":

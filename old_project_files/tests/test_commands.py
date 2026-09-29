@@ -82,6 +82,45 @@ def test_model_api_rejects_empty():
     assert agent.config.api_key == "none"
 
 
+def test_cloud_and_local_switch_from_the_prompt(monkeypatch, tmp_path):
+    path = tmp_path / ".env"
+    path.write_text(
+        "HF_BASE_URL=https://ollama.com/v1\nHFAGENT_MODEL=gpt-oss:120b\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr("hfagent.config.project_env_path", lambda: path)
+    monkeypatch.setenv("OLLAMA_API_KEY", "cloud-key-example-1234")
+    monkeypatch.delenv("HFAGENT_LOCAL_MODEL", raising=False)
+    monkeypatch.delenv("HFAGENT_CLOUD_MODEL", raising=False)
+    monkeypatch.setattr(
+        "hfagent.commands.list_model_names",
+        lambda base_url, api_key="": ["qwen3:8b"],
+    )
+    agent = _agent()
+    agent.config.base_url = "https://ollama.com/v1"
+    agent.config.model = "gpt-oss:120b"
+    ui = Recorder()
+
+    assert dispatch_slash(agent, ui, "/local") == "handled"
+    assert "11434" in agent.config.base_url
+    assert agent.config.model == "qwen3:8b"
+    assert "11434" in str(agent.client.base_url)
+    text = path.read_text(encoding="utf-8")
+    assert "HF_BASE_URL=http://127.0.0.1:11434/v1" in text
+    assert "HFAGENT_CLOUD_MODEL=gpt-oss:120b" in text
+    assert "HFAGENT_MODEL=qwen3:8b" in text
+    assert "cloud-key-example-1234" not in "\n".join(ui.status + ui.system + ui.errors)
+
+    assert dispatch_slash(agent, ui, "/cloud") == "handled"
+    assert agent.config.base_url == "https://ollama.com/v1"
+    assert agent.config.model == "gpt-oss:120b"
+    assert agent.config.api_key == "cloud-key-example-1234"
+    assert "ollama.com" in str(agent.client.base_url)
+    text = path.read_text(encoding="utf-8")
+    assert "HF_BASE_URL=https://ollama.com/v1" in text
+    assert "HFAGENT_LOCAL_MODEL=qwen3:8b" in text
+
+
 def test_approval_toggle():
     agent = _agent()
     ui = Recorder()

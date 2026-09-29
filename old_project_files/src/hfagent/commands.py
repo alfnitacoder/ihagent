@@ -6,10 +6,16 @@ from typing import Literal
 
 from .agent import Agent, AgentUI
 from .config import (
+    OLLAMA_BASE_URL,
+    _api_key_for,
     env_name_for_api_key,
+    host_label,
+    host_model_env,
     list_model_names,
     resolve_model_choice,
     save_api_key,
+    save_base_url,
+    save_host_model,
     save_selected_model,
 )
 from .memory import clear_memory, load_memory
@@ -24,6 +30,8 @@ HELP = """\
 /memory           show what the agent remembers long-term
 /skills           list coding skills (builtin + ~/.hfagent/skills)
 /forget           wipe long-term memory
+/cloud            use Ollama Cloud (saved for the next launch)
+/local            use Ollama on this PC (saved for the next launch)
 /model <name|#| > switch model (name, unique part, or list number)
 /model_api=<key>  paste an Ollama Cloud or Hugging Face key (saved, not shown)
 /sessions         list saved sessions
@@ -31,7 +39,7 @@ HELP = """\
 /clear            reset the conversation
 /exit, /quit      leave the agent
 
-TUI keys: f2 choose model · drag to copy · ctrl+shift+c copy · ctrl+b sidebar · ctrl+l clear · ctrl+q quit · up/down history
+TUI keys: /cloud or /local · f2 choose model · drag to copy · ctrl+shift+c copy · ctrl+b sidebar · ctrl+l clear · ctrl+q quit · up/down history
 While a task runs: type a note and it is picked up on the next step. Type stop to cancel.
 Classic line REPL: ihagent --console
 """
@@ -137,6 +145,14 @@ def dispatch_slash(agent: Agent, ui: AgentUI, line: str) -> SlashResult:
         ui.on_status(f"resumed session: {name} ({len(messages)} messages)")
         return "resume"
 
+    if command in ("/cloud", "/local"):
+        _switch_host(agent, ui, command[1:])
+        return "handled"
+
+    if command == "/host":
+        _switch_host(agent, ui, arg)
+        return "handled"
+
     if command == "/model":
         if arg:
             names = list_model_names(agent.config.base_url, agent.config.api_key)
@@ -152,6 +168,50 @@ def dispatch_slash(agent: Agent, ui: AgentUI, line: str) -> SlashResult:
 
     ui.on_system(f"unknown command {command}\n{HELP}")
     return "handled"
+
+
+CLOUD_BASE_URL = "https://ollama.com/v1"
+
+
+def _switch_host(agent: Agent, ui: AgentUI, kind: str) -> None:
+    """Move between Ollama Cloud and local Ollama, and remember both models."""
+    import os
+
+    kind = kind.strip().lower()
+    if kind not in ("cloud", "local"):
+        label = host_label(agent.config.base_url)
+        ui.on_status(f"host: {label} · model: {agent.config.model}")
+        ui.on_system("switch with /cloud or /local, then f2 to pick a model")
+        return
+
+    current = host_label(agent.config.base_url)
+    if current in ("cloud", "local") and agent.config.model:
+        os.environ[host_model_env(current)] = agent.config.model
+        save_host_model(current, agent.config.model)
+
+    base = CLOUD_BASE_URL if kind == "cloud" else OLLAMA_BASE_URL
+    remembered = os.environ.get(host_model_env(kind), "").strip()
+    key = _api_key_for(base) if kind == "cloud" else ""
+    found = bool(remembered)
+    model = remembered
+    if not model:
+        names = list_model_names(base, key)
+        if names:
+            found = True
+            model = names[0]
+        else:
+            model = agent.config.model
+    agent.retarget(base_url=base, api_key=key, model=model)
+    os.environ["HF_BASE_URL"] = base
+    os.environ["HFAGENT_MODEL"] = model
+    save_base_url(base)
+    save_selected_model(model)
+    if kind == "cloud" and not key:
+        ui.on_status("host: cloud — paste your key as /model_api=...")
+    elif not found:
+        ui.on_status(f"host: {kind} — press f2 to choose a model")
+    else:
+        ui.on_status(f"host: {kind} · model: {model}")
 
 
 def _apply_pasted_key(agent: Agent, ui: AgentUI, key: str) -> None:
