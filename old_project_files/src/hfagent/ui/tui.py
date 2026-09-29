@@ -179,6 +179,12 @@ class TurnDone(Message):
     pass
 
 
+class ModelsReady(Message):
+    def __init__(self, names: list[str]) -> None:
+        super().__init__()
+        self.names = names
+
+
 class RuntimeMsg(Message):
     def __init__(self, device: str, prompt_tokens: int, completion_tokens: int) -> None:
         super().__init__()
@@ -277,6 +283,43 @@ class SessionRow(ListItem):
         label = name if not preview else f"{name}\n{preview}"
         super().__init__(Label(label, markup=False))
         self.session_name = name
+
+
+class ModelRow(ListItem):
+    def __init__(self, name: str, current: bool) -> None:
+        mark = "→ " if current else "  "
+        super().__init__(Label(mark + name, markup=False))
+        self.model_name = name
+
+
+class ModelPicker(ModalScreen[str | None]):
+    """Click or press enter on a model. Escape closes without changing."""
+
+    BINDINGS = [
+        Binding("escape", "cancel", "Close", show=True, priority=True),
+    ]
+
+    def __init__(self, names: list[str], current: str) -> None:
+        super().__init__()
+        self.names = names
+        self.current = current
+
+    def compose(self) -> ComposeResult:
+        with Vertical(id="dialog"):
+            yield Label("Choose a model", id="model-title")
+            yield ListView(
+                *[ModelRow(name, name == self.current) for name in self.names],
+                id="model-list",
+            )
+
+    @on(ListView.Selected, "#model-list")
+    def on_model_selected(self, event: ListView.Selected) -> None:
+        item = event.item
+        if isinstance(item, ModelRow):
+            self.dismiss(item.model_name)
+
+    def action_cancel(self) -> None:
+        self.dismiss(None)
 
 
 class ApprovalModal(ModalScreen[bool]):
@@ -432,6 +475,32 @@ class HfAgentApp(App):
         border: tall $accent 50%;
     }
 
+    ModelPicker {
+        align: center middle;
+    }
+
+    ModelPicker #dialog {
+        width: 72;
+        max-width: 100%;
+        height: auto;
+        max-height: 80%;
+        background: $surface;
+        border: thick $accent;
+        padding: 1 2;
+    }
+
+    ModelPicker #model-title {
+        text-style: bold;
+        color: $accent;
+        height: auto;
+    }
+
+    ModelPicker #model-list {
+        height: auto;
+        max-height: 18;
+        margin: 1 0 0 0;
+    }
+
     ApprovalModal {
         align: center middle;
     }
@@ -470,6 +539,7 @@ class HfAgentApp(App):
         Binding("ctrl+b", "toggle_sidebar", "Sidebar"),
         Binding("ctrl+l", "clear_chat", "Clear"),
         Binding("f1", "show_help", "Help"),
+        Binding("f2", "pick_model", "Model"),
         Binding(
             "ctrl+c,super+c",
             "copy_or_quit_hint",
@@ -574,7 +644,7 @@ class HfAgentApp(App):
             f"model: {cfg.model}\n"
             f"device: {self._device}    tokens: {self._prompt_tokens} in / {self._completion_tokens} out\n"
             f"tools: {tools}\n"
-            "type /help for commands · while a task runs, type stop or add a note"
+            "f2 chooses a model · while a task runs, type stop or add a note"
         )
         await chat.mount(Static(banner, markup=False, classes="system"))
 
@@ -760,6 +830,39 @@ class HfAgentApp(App):
         selected = self.screen.get_selected_text()
         if selected and selected.strip():
             self._copy_text(selected)
+
+    def action_pick_model(self) -> None:
+        self.set_status("loading models…")
+        self.run_worker(self._load_models, thread=True, exclusive=True, group="models")
+
+    def _load_models(self) -> None:
+        from ..config import list_model_names
+
+        names = list_model_names(self.agent.config.base_url, self.agent.config.api_key)
+        self.post_message(ModelsReady(names))
+
+    def on_models_ready(self, event: ModelsReady) -> None:
+        if not event.names:
+            self.set_status("no models found on this host")
+            return
+
+        def chosen(name: str | None) -> None:
+            if name:
+                self._apply_model(name)
+            else:
+                self.set_status("ready")
+
+        self.push_screen(ModelPicker(event.names, self.agent.config.model), chosen)
+
+    def _apply_model(self, name: str) -> None:
+        from ..config import save_selected_model
+
+        self.agent.config.model = name
+        self._device = "…"
+        self.refresh_header()
+        save_selected_model(name)
+        self.set_status(f"model: {name}")
+        self.run_worker(self._probe_device, thread=True, exclusive=False)
 
     def action_show_help(self) -> None:
         from ..commands import HELP

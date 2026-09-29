@@ -170,6 +170,23 @@ def test_tui_note_and_stop_while_busy():
     asyncio.run(scenario())
 
 
+def test_tui_apply_model_updates_header(monkeypatch, tmp_path):
+    monkeypatch.setattr(
+        "hfagent.config.save_selected_model",
+        lambda name, path=None: tmp_path / ".env",
+    )
+    app = HfAgentApp(_agent())
+
+    async def scenario():
+        async with app.run_test(size=(120, 36)) as pilot:
+            app._apply_model("kimi-k2.7-code")
+            await pilot.pause()
+            assert app.agent.config.model == "kimi-k2.7-code"
+            assert "kimi-k2.7-code" in str(app.query_one("#header-bar").content)
+
+    asyncio.run(scenario())
+
+
 def test_tui_sidebar_toggle_and_tools():
     app = HfAgentApp(_agent())
 

@@ -40,7 +40,12 @@ def _load_dotenv() -> None:
             if override or key not in os.environ:
                 os.environ[key] = value
 
-    apply(Path.cwd() / ".env", override=True)
+    project = Path.cwd() / ".env"
+    if not project.is_file():
+        parent = Path.cwd().parent / ".env"
+        if parent.is_file():
+            project = parent
+    apply(project, override=True)
     apply(Path.home() / ".hfagent" / ".env", override=False)
 
 def _api_key_for(base_url: str) -> str:
@@ -52,6 +57,109 @@ def _api_key_for(base_url: str) -> str:
             or ""
         )
     return os.environ.get("HF_TOKEN") or os.environ.get("HF_API_KEY") or ""
+
+
+def project_env_path() -> Path:
+    """The project .env IHAgent is using, or ``./.env`` if none exists yet."""
+    cwd = Path.cwd() / ".env"
+    if cwd.is_file():
+        return cwd
+    parent = Path.cwd().parent / ".env"
+    if parent.is_file():
+        return parent
+    return cwd
+
+
+def save_selected_model(model: str, path: Path | None = None) -> Path:
+    """Remember the chosen model in the project .env."""
+    path = path or project_env_path()
+    lines = path.read_text(encoding="utf-8").splitlines() if path.is_file() else []
+    replaced = False
+    out: list[str] = []
+    for line in lines:
+        if not replaced and line.strip().startswith("HFAGENT_MODEL="):
+            out.append(f"HFAGENT_MODEL={model}")
+            replaced = True
+        else:
+            out.append(line)
+    if not replaced:
+        if out and out[-1] != "":
+            out.append("")
+        out.append(f"HFAGENT_MODEL={model}")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("\n".join(out).rstrip() + "\n", encoding="utf-8")
+    return path
+
+
+def names_from_model_payload(payload: object) -> list[str]:
+    """Pull model ids from an Ollama tags body or an OpenAI /v1/models body."""
+    if not isinstance(payload, dict):
+        return []
+    names: list[str] = []
+    entries = payload.get("models")
+    if not isinstance(entries, list):
+        entries = payload.get("data")
+    if not isinstance(entries, list):
+        return []
+    for entry in entries:
+        if isinstance(entry, str) and entry:
+            names.append(entry)
+            continue
+        if not isinstance(entry, dict):
+            continue
+        name = entry.get("name") or entry.get("model") or entry.get("id") or ""
+        if isinstance(name, str) and name:
+            names.append(name)
+    return names
+
+
+def list_model_names(base_url: str, api_key: str = "") -> list[str]:
+    """List models on the current local Ollama, Ollama Cloud, or OpenAI-compatible host."""
+    import json
+    from urllib.request import Request, urlopen
+
+    host = base_url.rstrip("/")
+    urls: list[str] = []
+    if "11434" in host or "ollama.com" in host:
+        origin = host[:-3] if host.endswith("/v1") else host
+        urls.append(origin.rstrip("/") + "/api/tags")
+    urls.append(host + "/models")
+    headers = {"Authorization": f"Bearer {api_key}"} if api_key else {}
+    for url in urls:
+        try:
+            with urlopen(Request(url, headers=headers), timeout=8) as resp:
+                payload = json.load(resp)
+        except Exception:
+            continue
+        names = names_from_model_payload(payload)
+        if names:
+            return names
+    return []
+
+
+def resolve_model_choice(requested: str, names: list[str]) -> str:
+    """Pick a model by exact name, unique substring, or 1-based list number."""
+    requested = requested.strip()
+    if not names:
+        if not requested:
+            raise ValueError("no models available")
+        return requested
+    if requested.isdigit():
+        index = int(requested)
+        if 1 <= index <= len(names):
+            return names[index - 1]
+        raise ValueError(f"model number {requested} is out of range (1-{len(names)})")
+    if requested in names:
+        return requested
+    matches = [name for name in names if requested.lower() in name.lower()]
+    if len(matches) == 1:
+        return matches[0]
+    if not requested:
+        return names[0]
+    shown = "\n".join(f"{i}. {name}" for i, name in enumerate(names, 1))
+    raise ValueError(
+        f"no unique model match for '{requested}'.\n{shown}"
+    )
 
 
 def _ollama_model_names() -> list[str]:
@@ -68,16 +176,7 @@ def _ollama_model_names() -> list[str]:
 
 def _resolve_ollama_name(requested: str) -> str:
     """Resolve a model name with exact-first, then unique-substring matching."""
-    names = _ollama_model_names()
-    if requested in names:
-        return requested
-    matches = [n for n in names if requested.lower() in n.lower()]
-    if len(matches) == 1:
-        return matches[0]
-    raise ValueError(
-        f"no unique Ollama model match for '{requested}'."
-        f"\nInstalled models: {', '.join(names) or '(none)'}"
-    )
+    return resolve_model_choice(requested, _ollama_model_names())
 
 
 def _first_ollama_model() -> str:

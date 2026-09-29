@@ -5,7 +5,7 @@ from __future__ import annotations
 from typing import Literal
 
 from .agent import Agent, AgentUI
-from .config import _ollama_model_names, _resolve_ollama_name
+from .config import list_model_names, resolve_model_choice, save_selected_model
 from .memory import clear_memory, load_memory
 from .sessions import list_sessions, load_session
 from .skills import skills_index
@@ -13,18 +13,18 @@ from .skills import skills_index
 HELP = """\
 /help             show this help
 /tools            list available tools
-/models           list installed Ollama models (--ollama only)
+/models           list models on the current host
 /approval [mode]  switch approval mode: auto or default
 /memory           show what the agent remembers long-term
 /skills           list coding skills (builtin + ~/.hfagent/skills)
 /forget           wipe long-term memory
-/model <id>       switch model (e.g. Qwen/Qwen3-32B)
+/model <name|#| > switch model (name, unique part, or list number)
 /sessions         list saved sessions
 /resume [name]    load a saved session ('last' if no name given)
 /clear            reset the conversation
 /exit, /quit      leave the agent
 
-TUI keys: drag to copy · ctrl+shift+c copy · ctrl+b sidebar · ctrl+l clear · ctrl+q quit · up/down history
+TUI keys: f2 choose model · drag to copy · ctrl+shift+c copy · ctrl+b sidebar · ctrl+l clear · ctrl+q quit · up/down history
 While a task runs: type a note and it is picked up on the next step. Type stop to cancel.
 Classic line REPL: ihagent --console
 """
@@ -69,18 +69,16 @@ def dispatch_slash(agent: Agent, ui: AgentUI, line: str) -> SlashResult:
         return "handled"
 
     if command == "/models":
-        if "11434" in agent.config.base_url:
-            names = _ollama_model_names()
-            if not names:
-                ui.on_system("(no Ollama models found)")
-            else:
-                lines = [
-                    ("→ " if name == agent.config.model else "  ") + name
-                    for name in names
-                ]
-                ui.on_system("\n".join(lines))
+        names = list_model_names(agent.config.base_url, agent.config.api_key)
+        if not names:
+            ui.on_system("(no models found on this host)")
         else:
-            ui.on_status("/models only works with --ollama")
+            lines = [
+                f"{i}. {'→ ' if name == agent.config.model else '  '}{name}"
+                for i, name in enumerate(names, 1)
+            ]
+            lines.append("switch with /model <number or name>, or f2 in the TUI")
+            ui.on_system("\n".join(lines))
         return "handled"
 
     if command == "/tools":
@@ -116,14 +114,14 @@ def dispatch_slash(agent: Agent, ui: AgentUI, line: str) -> SlashResult:
 
     if command == "/model":
         if arg:
-            if "11434" in agent.config.base_url:
-                try:
-                    agent.config.model = _resolve_ollama_name(arg)
-                except ValueError as exc:
-                    ui.on_error(str(exc))
-                    return "handled"
-            else:
-                agent.config.model = arg
+            names = list_model_names(agent.config.base_url, agent.config.api_key)
+            try:
+                chosen = resolve_model_choice(arg, names)
+            except ValueError as exc:
+                ui.on_error(str(exc))
+                return "handled"
+            agent.config.model = chosen
+            save_selected_model(chosen)
         ui.on_status(f"model: {agent.config.model}")
         return "handled"
 
