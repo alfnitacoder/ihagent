@@ -6,17 +6,25 @@ from typing import Literal
 
 from .agent import Agent, AgentUI
 from .config import (
+    ANTHROPIC_BASE_URL,
+    ANTHROPIC_DEFAULT_MODEL,
     OLLAMA_BASE_URL,
-    _api_key_for,
+    api_key_info,
+    env_file_has_key,
     env_name_for_api_key,
+    format_config_report,
     host_label,
     host_model_env,
     list_model_names,
+    normalize_base_url,
+    probe_base_url,
+    project_env_path,
     resolve_model_choice,
     save_api_key,
     save_base_url,
     save_host_model,
     save_selected_model,
+    save_user_setting,
 )
 from .memory import clear_memory, load_memory
 from .sessions import delete_session, list_sessions, load_session
@@ -32,6 +40,10 @@ HELP = """\
 /forget           wipe long-term memory
 /cloud            use Ollama Cloud (saved for the next launch)
 /local            use Ollama on this PC (saved for the next launch)
+/claude           use Anthropic (Claude) — needs ANTHROPIC_API_KEY
+/url <base_url>   test a host (GET /v1/models) and switch to it
+/primary          switch back from the fallback host
+/config           show effective settings and where each came from
 /model <name|#| > switch model (name, unique part, or list number)
 /model_api=<key>  paste an Ollama Cloud or Hugging Face key (saved, not shown)
 /sessions         list saved sessions
@@ -158,8 +170,27 @@ def dispatch_slash(agent: Agent, ui: AgentUI, line: str) -> SlashResult:
         _switch_host(agent, ui, command[1:])
         return "handled"
 
+    if command == "/claude":
+        _switch_to_anthropic(agent, ui)
+        return "handled"
+
+    if command == "/config":
+        ui.on_system(format_config_report(agent.config))
+        return "handled"
+
+    if command == "/url":
+        _switch_url(agent, ui, arg)
+        return "handled"
+
+    if command == "/primary":
+        _switch_to_primary(agent, ui)
+        return "handled"
+
     if command == "/host":
-        _switch_host(agent, ui, arg)
+        if arg.strip().lower() in ("anthropic", "claude"):
+            _switch_to_anthropic(agent, ui)
+        else:
+            _switch_host(agent, ui, arg)
         return "handled"
 
     if command == "/model":
@@ -172,6 +203,7 @@ def dispatch_slash(agent: Agent, ui: AgentUI, line: str) -> SlashResult:
                 return "handled"
             agent.config.model = chosen
             save_selected_model(chosen)
+            agent.config.sources["model"] = "project .env"
         ui.on_status(f"model: {agent.config.model}")
         return "handled"
 
@@ -200,7 +232,7 @@ def _switch_host(agent: Agent, ui: AgentUI, kind: str) -> None:
 
     base = CLOUD_BASE_URL if kind == "cloud" else OLLAMA_BASE_URL
     remembered = os.environ.get(host_model_env(kind), "").strip()
-    key = _api_key_for(base) if kind == "cloud" else ""
+    key, key_var = api_key_info(base) if kind == "cloud" else ("", "")
     found = bool(remembered)
     model = remembered
     if not model:
@@ -210,11 +242,13 @@ def _switch_host(agent: Agent, ui: AgentUI, kind: str) -> None:
             model = names[0]
         else:
             model = agent.config.model
-    agent.retarget(base_url=base, api_key=key, model=model)
+    agent.retarget(base_url=base, api_key=key, model=model, api_key_var=key_var or None)
     os.environ["HF_BASE_URL"] = base
     os.environ["HFAGENT_MODEL"] = model
     save_base_url(base)
     save_selected_model(model)
+    agent.config.sources["base_url"] = "project .env"
+    agent.config.sources["model"] = "project .env"
     if kind == "cloud" and not key:
         ui.on_status("host: cloud — paste your key as /model_api=...")
     elif not found:
@@ -223,14 +257,110 @@ def _switch_host(agent: Agent, ui: AgentUI, kind: str) -> None:
         ui.on_status(f"host: {kind} · model: {model}")
 
 
+def _switch_to_anthropic(agent: Agent, ui: AgentUI) -> None:
+    """Point the agent at Anthropic's OpenAI-compatible endpoint (Claude)."""
+    import os
+
+    base = ANTHROPIC_BASE_URL
+    key, key_var = api_key_info(base)
+    model = os.environ.get("HFAGENT_MODEL", "")
+    if "claude" not in model.lower():
+        model = ANTHROPIC_DEFAULT_MODEL
+    agent.retarget(base_url=base, api_key=key, model=model, api_key_var=key_var)
+    os.environ["HF_BASE_URL"] = base
+    os.environ["HFAGENT_MODEL"] = model
+    save_base_url(base)
+    save_selected_model(model)
+    if not key:
+        ui.on_status("host: claude — paste your Anthropic key as /model_api=...")
+    else:
+        ui.on_status(f"host: claude · model: {model} — press f2 to pick another")
+
+
+def _switch_url(agent: Agent, ui: AgentUI, raw: str) -> None:
+    """GET /v1/models, then point the live session at the URL and save it."""
+    import os
+
+    try:
+        base = normalize_base_url(raw)
+    except ValueError as exc:
+        ui.on_error(str(exc))
+        return
+    key, key_var = api_key_info(base)
+    ok, detail, names, _kind = probe_base_url(base, key)
+    if not ok:
+        ui.on_error(detail)
+        return
+    current = agent.config.model
+    if names and current in names:
+        listed = f"model {current} is on this host"
+    elif names:
+        listed = f"model {current} is not in the list — /model to pick one"
+    else:
+        listed = f"keeping model {current}"
+    ui.on_system(f"{detail}\n{listed}")
+    agent.retarget(base_url=base, api_key=key, model=current, api_key_var=key_var)
+    agent.on_fallback = False
+    os.environ["HF_BASE_URL"] = base
+    saved = _persist_base_url(base)
+    where = ", ".join(saved)
+    # The user file is always written. If the project file was updated too,
+    # that file wins on the next launch.
+    agent.config.sources["base_url"] = (
+        "project .env" if len(saved) > 1 else "~/.hfagent/.env"
+    )
+    ui.on_status(f"host: {host_label(base)} · {base} — saved HF_BASE_URL to {where}")
+
+
+def _persist_base_url(url: str) -> list[str]:
+    """Write HF_BASE_URL to the user env file.
+
+    When the project .env also sets HF_BASE_URL, update that line so it does
+    not shadow the user file (project .env is higher precedence).
+    """
+    saved = [str(save_user_setting("HF_BASE_URL", url))]
+    project = project_env_path()
+    if env_file_has_key(project, "HF_BASE_URL"):
+        saved.append(str(save_base_url(url, project)))
+    return saved
+
+
+def _switch_to_primary(agent: Agent, ui: AgentUI) -> None:
+    """Return to the host we left when the fallback took over."""
+    target = agent.primary_target
+    if not agent.on_fallback or not target:
+        ui.on_status(
+            f"already on the primary host · {agent.config.base_url}"
+        )
+        return
+    base, key, model, key_var = target
+    ok, detail, _names, kind = probe_base_url(base, key)
+    if not ok and kind in {"dns", "tls", "timeout", "tunnel", "connect", "gateway"}:
+        ui.on_error(f"primary still unreachable: {detail}")
+        return
+    agent.retarget(
+        base_url=base,
+        api_key=key,
+        model=model,
+        api_key_var=key_var or None,
+    )
+    agent.on_fallback = False
+    agent.config.sources["base_url"] = "primary"
+    ui.on_status(f"switched back to primary {base} · model {model}")
+    if not ok:
+        ui.on_system(detail)
+
+
 def _apply_pasted_key(agent: Agent, ui: AgentUI, key: str) -> None:
     import os
 
     if not key or any(ch.isspace() for ch in key) or len(key) < 8:
         ui.on_status("paste the key as /model_api=...")
         return
-    os.environ[env_name_for_api_key(agent.config.base_url)] = key
+    var = env_name_for_api_key(agent.config.base_url)
+    os.environ[var] = key
     agent.config.api_key = key
+    agent.config.api_key_var = var
     agent.client.api_key = key
     save_api_key(key, agent.config.base_url)
     ui.on_status("api key saved")

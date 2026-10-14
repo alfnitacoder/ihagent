@@ -38,6 +38,61 @@ def test_nudge_fires_on_proposed_command(tmp_path):
     assert "real.txt" in tool_msgs[0]["content"]
 
 
+def _write_turn(call_id, path, content):
+    return [
+        Chunk(
+            Delta(
+                tool_calls=[
+                    ToolCallDelta(
+                        0,
+                        id=call_id,
+                        name="write_file",
+                        arguments=json.dumps({"path": str(path), "content": content}),
+                    )
+                ]
+            )
+        )
+    ]
+
+
+def test_runaway_write_loop_is_halted(tmp_path):
+    """Rewriting the same file over and over in one turn must stop, not loop."""
+    target = tmp_path / "file.md"
+    # The model keeps "extending" the same file; each call has new content so
+    # the signature differs every time. Supply more turns than the guard allows.
+    turns = [_write_turn(f"w{i}", target, "line\n" * (i + 1)) for i in range(10)]
+    agent, ui = make_agent(tmp_path, turns)
+    agent.config.approval = "auto"
+    ui.allow = True
+    final = agent.run("and open it")
+
+    assert "same file" in final.lower() or "rewriting the same file" in final.lower()
+    # Guard trips at the 3rd write to the same path, not after max_steps.
+    writes = [a for a in ui.actions if a[0] == "write_file"]
+    assert len(writes) == 3
+    assert not any("reached max steps" in e for e in ui.errors)
+    assert target.exists()
+
+
+def test_two_writes_same_file_still_allowed(tmp_path):
+    """A legit write→fix→finish (2 writes) must not trip the loop guard."""
+    target = tmp_path / "app.js"
+    turns = [
+        _write_turn("w1", target, "v1\n"),
+        _write_turn("w2", target, "v2 fixed\n"),
+        [Chunk(Delta(content="done: wrote app.js"))],
+    ]
+    agent, ui = make_agent(tmp_path, turns)
+    agent.config.approval = "auto"
+    ui.allow = True
+    final = agent.run("write app.js then fix the typo")
+
+    assert final == "done: wrote app.js"
+    writes = [a for a in ui.actions if a[0] == "write_file"]
+    assert len(writes) == 2
+    assert target.read_text() == "v2 fixed\n"
+
+
 def test_no_nudge_for_normal_answers(tmp_path):
     turns = [[Chunk(Delta(content="Hello! How can I help?"))]]
     agent, ui = make_agent(tmp_path, turns)

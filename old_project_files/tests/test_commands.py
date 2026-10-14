@@ -172,3 +172,77 @@ def test_approval_toggle():
     assert agent.config.approval == "auto"
     dispatch_slash(agent, ui, "/approval")
     assert "auto" in ui.status[-1]
+
+
+def test_url_probes_switches_and_saves_user_env(monkeypatch, tmp_path):
+    user = tmp_path / "user.env"
+    project = tmp_path / "project.env"
+    project.write_text("HF_BASE_URL=https://old.example/v1\n", encoding="utf-8")
+    monkeypatch.setattr("hfagent.config.user_env_path", lambda: user)
+    monkeypatch.setattr("hfagent.commands.project_env_path", lambda: project)
+    seen = {}
+
+    def probe(base, key=""):
+        seen["base"] = base
+        seen["key"] = key
+        return True, "reachable models", ["qwen3.8-27b"], "ok"
+
+    monkeypatch.setattr("hfagent.commands.probe_base_url", probe)
+    monkeypatch.setenv("HFAGENT_API_KEY", "tunnel-key-123456")
+    agent = _agent()
+    agent.config.model = "qwen3.8-27b"
+    ui = Recorder()
+    assert dispatch_slash(agent, ui, "/url https://abc.trycloudflare.com") == "handled"
+    assert seen["base"] == "https://abc.trycloudflare.com/v1"
+    assert seen["key"] == "tunnel-key-123456"
+    assert agent.config.base_url == "https://abc.trycloudflare.com/v1"
+    assert "abc.trycloudflare.com/v1" in str(agent.client.base_url)
+    assert "reachable" in ui.system[-1]
+    assert "qwen3.8-27b is on this host" in ui.system[-1]
+    assert "HF_BASE_URL=https://abc.trycloudflare.com/v1" in user.read_text(encoding="utf-8")
+    assert "HF_BASE_URL=https://abc.trycloudflare.com/v1" in project.read_text(encoding="utf-8")
+    assert "tunnel-key-123456" not in "\n".join(ui.status + ui.system + ui.errors)
+
+
+def test_url_failure_does_not_switch(monkeypatch, tmp_path):
+    user = tmp_path / "user.env"
+    monkeypatch.setattr("hfagent.config.user_env_path", lambda: user)
+    monkeypatch.setattr(
+        "hfagent.commands.probe_base_url",
+        lambda base, key="": (False, "Cannot reach https://down/v1: DNS failure", [], "dns"),
+    )
+    agent = _agent()
+    original = agent.config.base_url
+    ui = Recorder()
+    dispatch_slash(agent, ui, "/url https://down.example")
+    assert agent.config.base_url == original
+    assert not user.exists()
+    assert "DNS failure" in ui.errors[-1]
+
+
+def test_config_command_masks_the_key():
+    agent = _agent()
+    agent.config.api_key = "sk-supersecretvalue"
+    agent.config.api_key_var = "HFAGENT_API_KEY"
+    agent.config.sources["api_key"] = "process environment"
+    ui = Recorder()
+    assert dispatch_slash(agent, ui, "/config") == "handled"
+    report = ui.system[-1]
+    assert "sk-supersecretvalue" not in report
+    assert "sk-s…alue" in report
+    assert "process environment" in report
+    assert "HFAGENT_API_KEY" in report
+
+
+def test_custom_host_paste_saves_generic_key(monkeypatch, tmp_path):
+    path = tmp_path / ".env"
+    monkeypatch.setattr("hfagent.config.project_env_path", lambda: path)
+    monkeypatch.delenv("HFAGENT_API_KEY", raising=False)
+    agent = _agent()
+    agent.config.base_url = "https://abc.trycloudflare.com/v1"
+    ui = Recorder()
+    secret = "tunnel-key-example"
+    dispatch_slash(agent, ui, f"/model_api={secret}")
+    assert f"HFAGENT_API_KEY={secret}" in path.read_text(encoding="utf-8")
+    assert secret not in "\n".join(ui.status + ui.system + ui.errors)
+    assert agent.config.api_key_var == "HFAGENT_API_KEY"

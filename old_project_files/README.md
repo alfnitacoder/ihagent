@@ -76,6 +76,9 @@ Click a session in the sidebar to resume it.
 | `/help` | show commands |
 | `/tools` | list registered tools |
 | `/model <id>` | switch model, e.g. `Qwen/Qwen3-32B` |
+| `/url <base_url>` | test a host (`GET /v1/models`) and switch to it |
+| `/config` | show effective settings and where each came from |
+| `/primary` | switch back after an automatic fallback |
 | `/sessions` | list saved sessions |
 | `/resume [name]` | load a saved session |
 | `/clear` | reset the conversation |
@@ -98,9 +101,38 @@ Skip them at your own risk with `--yolo` (or `HFAGENT_YOLO=1`).
 
 ## Configuration
 
+Settings come from one ordered list. The first source that sets a value wins.
+`ihagent --show-config` and `/config` print the effective value and the source,
+with secrets masked (`sk-s…cret`).
+
+| Priority | Source |
+| :--- | :--- |
+| 1 | Command-line flags (`--model`, `--base-url`, `--max-steps`, …) |
+| 2 | Process environment (variables you exported in this shell) |
+| 3 | Project `.env` (`./.env`, or `../.env` if the current directory has none) |
+| 4 | `~/.hfagent/.env` |
+| 5 | `~/.hfagent/hf.env` |
+| 6 | Built-in defaults |
+
+`~/.hfagent/hf.env` is what `scripts/setup-huggingface.sh` writes, and shells
+often `source` it. A process value that is identical to that file is treated
+as the file, so it does not hide a newer model in the project `.env` or in
+`~/.hfagent/.env`. Export a different value when the shell should win.
+
 | Env var | Default | Meaning |
 | :--- | :--- | :--- |
-| `HF_TOKEN` | — | Hugging Face token (required for the HF router) |
+| `HFAGENT_API_KEY` | — | API key for **any** base URL. When set, this wins over the provider keys below |
+| `HF_TOKEN` / `HF_API_KEY` | — | Hugging Face token, used when `HFAGENT_API_KEY` is unset |
+| `OLLAMA_API_KEY` | — | Ollama Cloud key (`https://ollama.com`), then `HF_TOKEN` |
+| `ANTHROPIC_API_KEY` | — | Anthropic key for `https://api.anthropic.com` |
+| `HFAGENT_CONTEXT_TOKENS` | `65536` | Context window used for automatic compaction (~64K) |
+| `HFAGENT_FALLBACK_BASE_URL` | — | Host to use when the primary cannot be connected to |
+| `HFAGENT_FALLBACK_MODEL` | primary model | Model id on the fallback host |
+| `HFAGENT_FALLBACK_API_KEY` | key for that host | Optional key used only for the fallback |
+| `HF_BASE_URL` | `https://router.huggingface.co/v1` | any OpenAI-compatible endpoint |
+| `HFAGENT_MODEL` | `Qwen/Qwen2.5-Coder-32B-Instruct` | model id |
+| `HFAGENT_LOCAL_MODEL` | `~/.cache/huggingface/mlx/qwen2.5-0.5b-4bit` | model path used with `--local` |
+| `HFAGENT_MAX_STEPS` | `25` | agent loop iteration cap |
 
 ### Hugging Face GPU (cloud)
 
@@ -116,13 +148,55 @@ source ~/.hfagent/hf.env
 Windows: `powershell -ExecutionPolicy Bypass -File scripts\setup-huggingface.ps1`
 
 Pause billing with `hf endpoints pause hfagent-coder`.
-| `HFAGENT_LOCAL_MODEL` | `~/.cache/huggingface/mlx/qwen2.5-0.5b-4bit` | model path used with `--local` |
-| `HF_BASE_URL` | `https://router.huggingface.co/v1` | any OpenAI-compatible endpoint |
-| `HFAGENT_MODEL` | `Qwen/Qwen2.5-Coder-32B-Instruct` | model id |
-| `HFAGENT_MAX_STEPS` | `25` | agent loop iteration cap |
 
 Flags: `--tui` forces the panes UI; `--console` uses the line REPL. `-p` always
-runs one prompt and exits (no TUI).
+runs one prompt and exits (no TUI). `--show-config` prints the resolved
+settings and exits.
+
+### Custom hosts, tunnels, and context
+
+A user-run Ollama behind a Cloudflare quick tunnel is just another
+OpenAI-compatible base URL. Set `HFAGENT_API_KEY` so a stale `HF_TOKEN` in
+the environment is not sent instead:
+
+```bash
+export HFAGENT_API_KEY=...          # beats HF_TOKEN / OLLAMA_API_KEY / ANTHROPIC_API_KEY
+export HF_BASE_URL=https://<tunnel>.trycloudflare.com/v1
+export HFAGENT_MODEL=qwen3.8-27b-uncensored-mtp
+export HFAGENT_CONTEXT_TOKENS=65536 # lower this for smaller windows
+export HFAGENT_FALLBACK_BASE_URL=https://ollama.com/v1
+export HFAGENT_FALLBACK_MODEL=qwen3:8b
+export HFAGENT_FALLBACK_API_KEY=... # optional; otherwise the key for that host
+```
+
+Inside the session, `/url https://<tunnel>.trycloudflare.com` adds `/v1` when
+the path is missing, GETs `/v1/models` with the current key, and on success
+switches the live client. The URL is saved to `~/.hfagent/.env`. If the
+project `.env` also sets `HF_BASE_URL`, that line is updated too, because the
+project file would otherwise shadow the user file on the next launch.
+
+When the conversation approaches the context window, older turns are
+summarized locally (no extra model call). The system prompt and the newest
+turns stay, and an assistant tool call is never split from its tool results.
+Set `HFAGENT_CONTEXT_TOKENS` to the model's window. The estimate is about
+four characters per token, and some room is left for the reply.
+
+If the primary host fails at the connection (DNS, TLS, timeout, connect
+error, Cloudflare 530, or a 502/503/504 gateway) and
+`HFAGENT_FALLBACK_BASE_URL` is set, the session switches to the fallback and
+says so. Auth failures (401/403) stay on the primary. `/primary` switches
+back when the original host answers again.
+
+Reasoning models (Qwen3 via Ollama) may put text in `reasoning` /
+`reasoning_content`, or wrap it in `<think>` tags with an empty `content`.
+That text is shown dimmed as thought, in the TUI and the console, for both
+streaming and non-streaming responses. A reply that also has a final answer
+or a tool call is not treated as empty. Reasoning alone is nudged for a
+final answer.
+
+Connection errors name the base URL and the cause: DNS failure, TLS failure,
+tunnel gone (Cloudflare 530 / connect error), timeout, 401/403 auth (with the
+env var to set), 404 model not found, or 5xx.
 
 ## Local models — run fully offline
 

@@ -49,6 +49,15 @@ class ConsoleUI(AgentUI):
         # markup=False: dynamic text may contain [brackets] (sed, tags...)
         self.console.print(text, style="dim", markup=False, highlight=False)
 
+    def on_thought_delta(self, text: str) -> None:
+        self.console.print(
+            text, end="", style="dim italic", markup=False, highlight=False, soft_wrap=True
+        )
+
+    def on_thought_done(self, text: str) -> None:
+        if text:
+            self.console.print()
+
     def on_assistant_delta(self, text: str) -> None:
         self.console.print(text, end="", markup=False, highlight=False, soft_wrap=True)
 

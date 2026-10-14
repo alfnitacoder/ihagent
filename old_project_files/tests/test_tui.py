@@ -16,6 +16,7 @@ from hfagent.ui.tui import (
     Composer,
     ErrorMsg,
     HfAgentApp,
+    ThoughtMsg,
     collapse_repeated_lines,
     format_action,
     is_internal_nudge,
@@ -373,5 +374,25 @@ def test_tui_collapses_duplicate_errors():
             assert len(errors) == 1
             assert "Retrying in text-tool mode" in str(errors[0].content)
             assert "BadRequestError" not in str(errors[0].content)
+
+    asyncio.run(scenario())
+
+
+def test_tui_dims_reasoning_as_thought():
+    app = HfAgentApp(_agent())
+
+    async def scenario():
+        async with app.run_test(size=(100, 30)) as pilot:
+            app.post_message(ThoughtMsg("secret plan"))
+            await pilot.pause()
+            thoughts = list(app.query(".thought"))
+            assert len(thoughts) == 1
+            assert "secret plan" in str(thoughts[0].content)
+            assert "thought:" in str(thoughts[0].content)
+            app.post_message(ThoughtMsg("secret plan", done=True))
+            await pilot.pause()
+            # Closing the thought keeps the text and does not become an answer bubble.
+            assert len(app.query(".thought")) == 1
+            assert len(app.query("Markdown.assistant")) == 0
 
     asyncio.run(scenario())
