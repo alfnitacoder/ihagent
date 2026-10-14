@@ -55,6 +55,7 @@ _ALIASES = {
     "hfagent_iheye_track": "HFAGENT_IHEYE_TRACK",
     "hfagent_iheye_summary": "HFAGENT_IHEYE_SUMMARY",
     "hfagent_iheye_skin": "HFAGENT_IHEYE_SKIN",
+    "hfagent_iheye_look": "HFAGENT_IHEYE_LOOK",
 }
 
 # key -> (value in the process before we wrote it, value we wrote)

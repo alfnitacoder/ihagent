@@ -132,14 +132,14 @@ def approval_answer(label: object) -> bool | None:
 
 def drop_size(mode: str) -> tuple[float, float]:
     if mode == "chat-approval":
-        return DROP_W, 196.0
+        return DROP_W, 220.0
     if mode == "chat":
-        return DROP_W, 156.0
+        return DROP_W, 176.0
     if mode == "approval":
         return DROP_W, 128.0
     if mode == "summary":
         return DROP_W, 112.0
-    return DROP_W, 156.0
+    return DROP_W, 176.0
 
 
 def drop_contents(*, hover: bool, approval: bool, summary: bool) -> str:
@@ -171,12 +171,25 @@ def layout_drop(mode: str, width: float, height: float) -> dict[str, Rect]:
         return {
             "yes": Rect(10, 10, 72, 26),
             "no": Rect(90, 10, 72, 26),
-            "field": Rect(10, 42, width - 20, 26),
-            "reply": Rect(10, 74, width - 20, height - 84),
+            **_chat_controls(width, height, field_y=42, reply_y=90),
         }
+    return _chat_controls(width, height, field_y=10, reply_y=58)
+
+
+def _chat_controls(
+    width: float,
+    height: float,
+    *,
+    field_y: float,
+    reply_y: float,
+) -> dict[str, Rect]:
+    """Field, the 👁 look toggle, a capture note, and the reply."""
+    look_w = 62.0
     return {
-        "field": Rect(10, 10, width - 20, 26),
-        "reply": Rect(10, 42, width - 20, height - 52),
+        "field": Rect(10, field_y, max(40.0, width - 24 - look_w), 26),
+        "look": Rect(width - 10 - look_w, field_y, look_w, 26),
+        "note": Rect(10, field_y + 30, width - 20, 14),
+        "reply": Rect(10, reply_y, width - 20, max(20.0, height - reply_y - 8)),
     }
 
 

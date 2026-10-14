@@ -489,6 +489,20 @@ def system_prompt(base_url: str = "") -> str:
 
 
 
+def _steer_parts(parts: list) -> list:
+    """Mid-task note in front of a look capture that is already a content list."""
+    note = (
+        "The user paused you mid-task and added this. "
+        "Read it, adjust what you are doing, then continue "
+        "with your tools. Do not ignore it.\n\n"
+    )
+    if parts and isinstance(parts[0], dict) and parts[0].get("type") == "text":
+        first = dict(parts[0])
+        first["text"] = note + str(first.get("text") or "")
+        return [first, *parts[1:]]
+    return [{"type": "text", "text": note}, *parts]
+
+
 class AgentUI:
     """Interface between the agent loop and the presentation layer."""
 
@@ -572,7 +586,11 @@ class Agent:
 
     def steer(self, text: str) -> None:
         """Queue a chat message while a turn is already running."""
-        cleaned = text.strip()
+        if isinstance(text, list):
+            if text:
+                self._inbox.put(text)
+            return
+        cleaned = str(text or "").strip()
         if cleaned:
             self._inbox.put(cleaned)
 
@@ -584,9 +602,19 @@ class Agent:
         kind = ""
         while True:
             try:
-                text = self._inbox.get_nowait().strip()
+                item = self._inbox.get_nowait()
             except queue.Empty:
                 return kind
+            if isinstance(item, list):
+                self.messages.append(
+                    {"role": "user", "content": _steer_parts(item)}
+                )
+                self.ui.on_status("got your message — continuing with it")
+                kind = "note"
+                continue
+            text = str(item or "").strip()
+            if not text:
+                continue
             if is_stop_message(text):
                 self._discard_inbox()
                 return "stop"
@@ -646,7 +674,7 @@ class Agent:
 
     def _run(self, user_input: str) -> str:
         self._exchange_start = len(self.messages)
-        if AFFIRMATION_RE.match(user_input.strip()):
+        if isinstance(user_input, str) and AFFIRMATION_RE.match(user_input.strip()):
             last_assistant = next(
                 (
                     m

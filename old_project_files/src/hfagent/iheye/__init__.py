@@ -21,6 +21,7 @@ from .supervisor import (
     enabled_from_env,
     pyobjc_available,
     skin_name,
+    look_enabled,
     summary_enabled,
     track_enabled,
 )
@@ -41,13 +42,14 @@ __all__ = [
     "publish_summary",
     "start_if_enabled",
     "stop",
+    "look_enabled",
     "skin_name",
     "summary_enabled",
     "track_enabled",
     "unbind_handlers",
 ]
 
-USAGE = "usage: /iheye on|off | track on|off | summary on|off"
+USAGE = "usage: /iheye on|off | track on|off | summary on|off | look on|off"
 
 _ATEXIT = False
 
@@ -149,7 +151,7 @@ def stop() -> None:
 
 
 def handle_command(arg: str) -> str:
-    """``/iheye``, ``on|off``, ``track on|off``, ``summary on|off``."""
+    """``/iheye``, ``on|off``, ``track``, ``summary``, and ``look``."""
     parts = arg.strip().lower().split()
     if not parts or parts[0] == "status":
         return status_text()
@@ -174,12 +176,19 @@ def handle_command(arg: str) -> str:
         return _toggle_flag("track", "HFAGENT_IHEYE_TRACK", rest)
     if head == "summary":
         return _toggle_flag("summary", "HFAGENT_IHEYE_SUMMARY", rest)
+    if head == "look":
+        return _toggle_flag("look", "HFAGENT_IHEYE_LOOK", rest)
     return USAGE
 
 
 def _toggle_flag(label: str, env_name: str, rest: str) -> str:
     control = get_supervisor()
-    current = control.track if label == "track" else control.summary_enabled
+    if label == "track":
+        current = control.track
+    elif label == "summary":
+        current = control.summary_enabled
+    else:
+        current = control.look_enabled
     if rest in {"", "status"}:
         state = "on" if current else "off"
         return f"iheye {label} {state}"
@@ -190,14 +199,20 @@ def _toggle_flag(label: str, env_name: str, rest: str) -> str:
     _persist(env_name, "1" if enabled else "0")
     if label == "track":
         control.note_options(track=enabled)
-    else:
+    elif label == "summary":
         control.note_options(summary=enabled)
+    else:
+        control.note_options(look=enabled)
     return f"iheye {label} {rest}"
 
 
 def _sync_flags_from_env() -> None:
     try:
-        get_supervisor().note_options(track=track_enabled(), summary=summary_enabled())
+        get_supervisor().note_options(
+            track=track_enabled(),
+            summary=summary_enabled(),
+            look=look_enabled(),
+        )
     except Exception:
         pass
 
@@ -210,7 +225,8 @@ def status_text() -> str:
             name = control.host.app_name
         track = "track on" if control.track else "track off"
         summary = "summary on" if control.summary_enabled else "summary off"
-        return f"iheye on · {name} · {control.state} · {track} · {summary}"
+        look = "look on" if control.look_enabled else "look off"
+        return f"iheye on · {name} · {control.state} · {track} · {summary} · {look}"
     if not enabled_from_env():
         raw = os.environ.get("HFAGENT_IHEYE", "")
         if str(raw).strip() == "" and sys.platform != "darwin":
@@ -253,6 +269,11 @@ def config_report_lines() -> list[str]:
         "default" if skin_raw is None or str(skin_raw).strip() == "" else source_of("HFAGENT_IHEYE_SKIN")
     )
     lines.append(f"iheye_skin={skin_name()}  [{skin_source}]")
+    look_raw = os.environ.get("HFAGENT_IHEYE_LOOK")
+    look_source = (
+        "default" if look_raw is None or str(look_raw).strip() == "" else source_of("HFAGENT_IHEYE_LOOK")
+    )
+    lines.append(f"iheye_look={'on' if look_enabled() else 'off'}  [{look_source}]")
     if sys.platform != "darwin":
         lines.append("iheye_platform=not-macos")
     elif pyobjc_available():

@@ -15,6 +15,7 @@ import math
 import os
 import queue
 import sys
+import tempfile
 import threading
 import time
 import traceback
@@ -23,6 +24,14 @@ from .appearance import eye_geometry
 from .focus import FrontApp, activation_plan, eye_should_show, same_host
 from .host import HostInfo, front_tty_script, run_osascript
 from .lifecycle import helper_should_exit, pid_alive, watch_parent_exit_async
+from .look import (
+    FrontTarget,
+    capture_front_native,
+    capture_indicator,
+    cycle_look_pin,
+    look_button_title,
+    should_capture,
+)
 from .panels import (
     SUMMARY_SECONDS,
     approval_body,
@@ -794,6 +803,8 @@ def run_overlay(args, host: HostInfo) -> int:
             self.field = None
             self.yes = None
             self.no = None
+            self.look_button = None
+            self.note = None
             self.server = None
             self.host = host
             self.querying = False
@@ -801,6 +812,8 @@ def run_overlay(args, host: HostInfo) -> int:
             self.parent_pid = int(args.parent_pid)
             self.track = str(getattr(args, "track", "1")) != "0"
             self.summary_enabled = str(getattr(args, "summary", "1")) != "0"
+            self.look_enabled = str(getattr(args, "look", "1")) != "0"
+            self.look_pin = None
             self.skin = skin
             self.panel_w, self.panel_h = eye_w, eye_h
             self._state = "idle"
@@ -899,6 +912,10 @@ def run_overlay(args, host: HostInfo) -> int:
                 if not self.summary_enabled:
                     self.summary_text = ""
                     self._summary_showing = False
+                changed = True
+            if "look_enabled" in msg:
+                self.look_enabled = bool(msg.get("look_enabled"))
+                self._refresh_look_button()
                 changed = True
             if changed:
                 self._sync_drop()
@@ -1085,6 +1102,8 @@ def run_overlay(args, host: HostInfo) -> int:
             frames = layout_drop(self._mode, width, height)
             _place_view(self.reply, frames.get("reply"))
             _place_view(self.field, frames.get("field"))
+            _place_view(self.look_button, frames.get("look"))
+            _place_view(self.note, frames.get("note"))
             _place_view(self.yes, frames.get("yes"))
             _place_view(self.no, frames.get("no"))
 
@@ -1163,8 +1182,107 @@ def run_overlay(args, host: HostInfo) -> int:
             if not text:
                 return
             self.field.setStringValue_("")
-            self.server.send({"cmd": "chat", "text": text})
+            self._look_then_send(text)
+
+        def toggleLook_(self, _sender):
+            self._cycle_look()
+
+        @objc.python_method
+        def _should_look(self, text):
+            return should_capture(
+                text,
+                enabled=bool(self.look_enabled),
+                pin=self.look_pin,
+            )
+
+        @objc.python_method
+        def _capture_target(self):
+            front = _frontmost()
+            if front is not None and int(front.pid) != os.getpid():
+                return FrontTarget(front.pid, front.name, front.bundle_id)
+            prev = self._previous_app
+            if prev is not None:
+                try:
+                    return FrontTarget(
+                        int(prev.processIdentifier()),
+                        str(prev.localizedName() or ""),
+                        str(prev.bundleIdentifier() or ""),
+                    )
+                except Exception:
+                    return None
+            return None
+
+        @objc.python_method
+        def _look_then_send(self, text):
+            """Capture only for this send. Never from the animation timer."""
+            if not self._should_look(text):
+                self._deliver_chat(text, None)
+                return
+            target = self._capture_target()
+            if target is None:
+                self._deliver_chat(text, None)
+                return
+            if self.field is not None:
+                self.field.setEnabled_(False)
+            image_path = os.path.join(
+                tempfile.gettempdir(),
+                f"hfagent-iheye-look-{os.getpid()}.png",
+            )
+
+            def work(target=target, image_path=image_path, text=text):
+                capture = None
+                try:
+                    capture = capture_front_native(
+                        target,
+                        self.host,
+                        image_path,
+                        helper_pid=os.getpid(),
+                    )
+                except Exception:
+                    capture = None
+                AppHelper.callAfter(self._deliver_chat, text, capture)
+
+            threading.Thread(target=work, name="iheye-look", daemon=True).start()
+
+        @objc.python_method
+        def _deliver_chat(self, text, capture):
+            if self.field is not None:
+                self.field.setEnabled_(True)
+            if self.server is None:
+                self._restore_front()
+                return
+            payload = {"cmd": "chat", "text": text}
+            indicator = ""
+            if capture is not None:
+                hint = str(getattr(capture, "hint", "") or "").strip()
+                if hint:
+                    print(hint, file=sys.stderr)
+                    self.server.send({"cmd": "hint", "text": hint})
+                public = capture.public() if hasattr(capture, "public") else {}
+                if public and not public.get("skipped"):
+                    payload["look"] = public
+                indicator = capture_indicator(capture)
+            if self.note is not None:
+                self.note.setStringValue_(indicator)
+            self.server.send(payload)
             self._restore_front()
+
+        @objc.python_method
+        def _cycle_look(self):
+            if not self.look_enabled:
+                self._refresh_look_button()
+                return
+            self.look_pin = cycle_look_pin(self.look_pin)
+            self._refresh_look_button()
+
+        @objc.python_method
+        def _refresh_look_button(self):
+            if self.look_button is None:
+                return
+            if not self.look_enabled:
+                self.look_button.setTitle_("👁 off")
+                return
+            self.look_button.setTitle_(look_button_title(self.look_pin))
 
         def dismissHover_(self, _sender):
             self._suppressed = True
@@ -1377,8 +1495,16 @@ def run_overlay(args, host: HostInfo) -> int:
         field.setDelegate_(controller)
         yes = _button("y", "approveYes:")
         no = _button("N", "approveNo:")
+        look = _button("👁", "toggleLook:")
+        look.setToolTip_("Use what I'm viewing")
+        look.setFont_(NSFont.systemFontOfSize_(12))
+        note = _label()
+        note.setFont_(NSFont.systemFontOfSize_(11))
+        note.setTextColor_(NSColor.colorWithCalibratedWhite_alpha_(0.72, 1))
         drop_view.addSubview_(reply)
         drop_view.addSubview_(field)
+        drop_view.addSubview_(look)
+        drop_view.addSubview_(note)
         drop_view.addSubview_(yes)
         drop_view.addSubview_(no)
         drop.setContentView_(drop_view)
@@ -1388,6 +1514,9 @@ def run_overlay(args, host: HostInfo) -> int:
         controller.field = field
         controller.yes = yes
         controller.no = no
+        controller.look_button = look
+        controller.note = note
+        controller._refresh_look_button()
         panel.orderOut_(None)
         drop.orderOut_(None)
 
