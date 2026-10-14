@@ -415,7 +415,7 @@ cd old_project_files
 pytest
 ```
 
-An editable install from `old_project_files/` itself is `pip install -e '.[dev,browser]'`. The suite covers the agent loop, config precedence, `/url` and fallback, context compaction, reasoning display, browser approvals, the TUI helpers, and iheye focus, hover, summary, and supervisor rules. Those iheye tests do not open AppKit. The overlay itself runs only on macOS. The suite does not launch a live model or a live browser.
+An editable install from `old_project_files/` itself is `pip install -e '.[dev,browser,iheye]'`. The suite covers the agent loop, config precedence, `/url` and fallback, context compaction, reasoning display, browser approvals, the TUI helpers, and iheye focus, hover, summary, and supervisor rules. Those iheye tests do not open AppKit. The overlay itself runs only on macOS. The suite does not launch a live model or a live browser.
 
 Runtime dependencies are `openai`, `rich`, and `textual`. Browser tools additionally need `playwright`. The console entry points are both `hfagent.cli:main`.
 
