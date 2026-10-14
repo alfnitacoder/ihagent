@@ -19,6 +19,15 @@ from pathlib import Path
 
 from .appearance import STATES
 from .host import HostInfo
+from .look import (
+    accepts_look_context,
+    assemble_turn,
+    call_chat_handler,
+    capture_from_message,
+    forget_look_image,
+    model_can_see,
+)
+from .robot import normalize_skin, skin_from_env
 from .panels import clean_chat_text, summarize_answer, trim_reply
 from .protocol import connect_socket, decode, encode
 
@@ -50,6 +59,16 @@ def track_enabled(environ: dict[str, str] | None = None) -> bool:
 def summary_enabled(environ: dict[str, str] | None = None) -> bool:
     """``HFAGENT_IHEYE_SUMMARY`` — completion card under the eye."""
     return flag_enabled("HFAGENT_IHEYE_SUMMARY", True, environ)
+
+
+def look_enabled(environ: dict[str, str] | None = None) -> bool:
+    """``HFAGENT_IHEYE_LOOK`` — one-shot capture when a hover question is sent."""
+    return flag_enabled("HFAGENT_IHEYE_LOOK", True, environ)
+
+
+def skin_name(environ: dict[str, str] | None = None) -> str:
+    """``HFAGENT_IHEYE_SKIN`` — ``robot`` or ``classic``. Default is robot."""
+    return skin_from_env(environ)
 
 
 def enabled_from_env(environ: dict[str, str] | None = None, platform_name: str | None = None) -> bool:
@@ -87,6 +106,8 @@ def helper_command(
     executable: str | None = None,
     track: bool = True,
     summary: bool = True,
+    look: bool = True,
+    skin: str = "robot",
 ) -> list[str]:
     return [
         executable or sys.executable,
@@ -114,6 +135,10 @@ def helper_command(
         "1" if track else "0",
         "--summary",
         "1" if summary else "0",
+        "--look",
+        "1" if look else "0",
+        "--skin",
+        normalize_skin(skin),
     ]
 
 
@@ -133,6 +158,10 @@ class EyeSupervisor:
         self.state = "idle"
         self.track = track_enabled()
         self.summary_enabled = summary_enabled()
+        self.look_enabled = look_enabled()
+        self.model_name = ""
+        self.model_base = ""
+        self.skin = skin_from_env()
         self.host: HostInfo | None = None
         self.on_chat = None
         self.on_approval = None
@@ -187,6 +216,8 @@ class EyeSupervisor:
             host=host,
             track=self.track,
             summary=self.summary_enabled,
+            look=self.look_enabled,
+            skin=self.skin,
         )
         self.log_path.parent.mkdir(parents=True, exist_ok=True)
         log_fh = open(self.log_path, "w", encoding="utf-8")
@@ -210,6 +241,7 @@ class EyeSupervisor:
         self._pending_msgs["options"] = {
             "track": self.track,
             "summary_enabled": self.summary_enabled,
+            "look_enabled": self.look_enabled,
         }
         self._thread = threading.Thread(target=self._flush_loop, name="iheye-flush", daemon=True)
         self._thread.start()
@@ -306,7 +338,13 @@ class EyeSupervisor:
         with self._lock:
             self._enqueue_locked("approval", message)
 
-    def note_options(self, *, track: bool | None = None, summary: bool | None = None) -> None:
+    def note_options(
+        self,
+        *,
+        track: bool | None = None,
+        summary: bool | None = None,
+        look: bool | None = None,
+    ) -> None:
         message: dict = {}
         with self._lock:
             if track is not None:
@@ -315,6 +353,9 @@ class EyeSupervisor:
             if summary is not None:
                 self.summary_enabled = bool(summary)
                 message["summary_enabled"] = self.summary_enabled
+            if look is not None:
+                self.look_enabled = bool(look)
+                message["look_enabled"] = self.look_enabled
             if not message or self._proc is None:
                 return
             self._enqueue_locked("options", message)
@@ -401,6 +442,31 @@ class EyeSupervisor:
             for msg in inbound:
                 self._dispatch(msg)
 
+    def _vision_model(self) -> bool:
+        model = (self.model_name or os.environ.get("HFAGENT_MODEL") or "").strip()
+        base = (self.model_base or os.environ.get("HF_BASE_URL") or "").strip()
+        if not model:
+            from ..config import DEFAULT_MODEL
+
+            model = DEFAULT_MODEL
+        return model_can_see(model, base)
+
+    def _look_prompt(self, text: str, payload: object) -> tuple[str, str | list]:
+        if not isinstance(payload, dict):
+            return text, text
+        capture = capture_from_message(payload)
+        try:
+            string_prompt, rich = assemble_turn(
+                text,
+                capture,
+                vision=self._vision_model(),
+            )
+        except Exception:
+            string_prompt, rich = text, text
+        finally:
+            forget_look_image(capture.image)
+        return string_prompt, rich
+
     def _dispatch(self, msg: dict) -> None:
         cmd = msg.get("cmd")
         try:
@@ -408,7 +474,8 @@ class EyeSupervisor:
                 text = clean_chat_text(msg.get("text") or "")
                 handler = self.on_chat
                 if text and handler is not None:
-                    handler(text)
+                    string_prompt, rich = self._look_prompt(text, msg.get("look"))
+                    call_chat_handler(handler, text, rich, string_prompt)
                 return
             if cmd == "approve":
                 handler = self.on_approval

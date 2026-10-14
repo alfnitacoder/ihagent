@@ -152,13 +152,18 @@ def repl(agent: Agent, ui: ConsoleUI) -> None:
     busy = {"on": False}
     ui.eye_approvals = approvals
 
-    def on_chat(text: str) -> None:
+    def on_chat(text: str, prompt=None) -> None:
+        shown = text
+        body = text if prompt is None else prompt
         if busy["on"]:
-            ui.console.print(f"❯ {text}", markup=False, highlight=False)
-            agent.steer(text)
+            ui.console.print(f"❯ {shown}", markup=False, highlight=False)
+            agent.steer(body)
             ui.on_status("noted — it will read this and continue")
             return
-        chats.put(text)
+        if prompt is None or prompt == text:
+            chats.put(text)
+        else:
+            chats.put((shown, body))
 
     def on_approval(yes: bool) -> None:
         approvals.put(bool(yes))
@@ -166,6 +171,14 @@ def repl(agent: Agent, ui: ConsoleUI) -> None:
     from .iheye import bind_handlers, unbind_handlers
 
     bind_handlers(on_chat, on_approval)
+    try:
+        from .iheye import get_supervisor
+
+        control = get_supervisor()
+        control.model_name = agent.config.model
+        control.model_base = agent.config.base_url
+    except Exception:
+        pass
     ui.banner(agent.config.model, agent.registry.names())
     try:
         while True:
@@ -174,9 +187,9 @@ def repl(agent: Agent, ui: ConsoleUI) -> None:
             except (EOFError, KeyboardInterrupt):
                 print()
                 break
-            if not user_input:
+            if user_input is None or user_input == "":
                 continue
-            if user_input.startswith("/"):
+            if isinstance(user_input, str) and user_input.startswith("/"):
                 result = dispatch_slash(agent, ui, user_input)
                 if result == "exit":
                     break
@@ -203,8 +216,12 @@ def repl(agent: Agent, ui: ConsoleUI) -> None:
         ui.eye_approvals = None
 
 
-def _next_console_line(chats: queue.Queue[str]) -> str:
-    """Read the prompt, or a hover-chat line that arrived while we were waiting."""
+def _next_console_line(chats: queue.Queue) -> str:
+    """Read the prompt, or a hover-chat line that arrived while we were waiting.
+
+    A look capture arrives as ``(shown, body)``. The console prints ``shown``
+    and the agent receives ``body``, which may include the front app.
+    """
     sys.stdout.write("❯ ")
     sys.stdout.flush()
     while True:
@@ -212,10 +229,16 @@ def _next_console_line(chats: queue.Queue[str]) -> str:
             eyed = chats.get_nowait()
         except queue.Empty:
             eyed = ""
-        if eyed:
-            sys.stdout.write(eyed + "\n")
+        if isinstance(eyed, tuple):
+            shown, body = eyed
+        else:
+            shown, body = eyed, eyed
+        if shown:
+            sys.stdout.write(str(shown) + "\n")
             sys.stdout.flush()
-            return eyed.strip()
+            if isinstance(body, str):
+                return body.strip()
+            return body
         try:
             ready, _, _ = select.select([sys.stdin], [], [], 0.2)
         except (OSError, ValueError):

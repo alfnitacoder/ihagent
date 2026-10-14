@@ -11,9 +11,11 @@ printed; the pupil still follows the pointer.
 
 from __future__ import annotations
 
+import math
 import os
 import queue
 import sys
+import tempfile
 import threading
 import time
 import traceback
@@ -22,6 +24,14 @@ from .appearance import eye_geometry
 from .focus import FrontApp, activation_plan, eye_should_show, same_host
 from .host import HostInfo, front_tty_script, run_osascript
 from .lifecycle import helper_should_exit, pid_alive, watch_parent_exit_async
+from .look import (
+    FrontTarget,
+    capture_front_native,
+    capture_indicator,
+    cycle_look_pin,
+    look_button_title,
+    should_capture,
+)
 from .panels import (
     SUMMARY_SECONDS,
     approval_body,
@@ -35,6 +45,21 @@ from .panels import (
 )
 from .position import clamp_position, default_position, drop_origin, load_position, save_position
 from .protocol import EyeServer
+from .robot import (
+    ASSETS,
+    CLASSIC_H,
+    CLASSIC_W,
+    METAL_LID,
+    assets_ready,
+    describe_frame,
+    load_layout,
+    normalize_skin,
+    panel_size,
+    point_in_frame,
+    resolve_skin,
+    ring_specs,
+    robot_pose,
+)
 from .supervisor import INSTALL_HINT
 from .appearance import pupil_offset
 from .tracking import (
@@ -48,8 +73,8 @@ from .tracking import (
     typing_reaction,
 )
 
-PANEL_W = 88.0
-PANEL_H = 100.0
+PANEL_W = CLASSIC_W
+PANEL_H = CLASSIC_H
 
 
 def run_overlay(args, host: HostInfo) -> int:
@@ -62,11 +87,17 @@ def run_overlay(args, host: HostInfo) -> int:
             NSApplication,
             NSApplicationActivateIgnoringOtherApps,
             NSApplicationActivationPolicyAccessory,
+            NSAffineTransform,
             NSBackingStoreBuffered,
             NSBezierPath,
+            NSBitmapImageRep,
             NSButton,
+            NSCalibratedRGBColorSpace,
             NSColor,
+            NSCompositingOperationSourceOver,
             NSEvent,
+            NSGraphicsContext,
+            NSImage,
             NSFloatingWindowLevel,
             NSFont,
             NSFontAttributeName,
@@ -88,6 +119,7 @@ def run_overlay(args, host: HostInfo) -> int:
         from Foundation import (
             NSMakePoint,
             NSMakeRect,
+            NSZeroRect,
             NSMutableParagraphStyle,
             NSObject,
             NSString,
@@ -139,6 +171,15 @@ def run_overlay(args, host: HostInfo) -> int:
             self.onClick = None
             self.onDrag = None
             self.onDragEnd = None
+            self._skin = "classic"
+            self._layout = None
+            self._layer_mode = False
+            self._ring_cache = {}
+            self._core_contents = None
+            self._frame_image = None
+            self._iris_image = None
+            self._anim_state = None
+            self._layers = None
             return self
 
         def isOpaque(self):
@@ -149,16 +190,457 @@ def run_overlay(args, host: HostInfo) -> int:
 
         def setEyeState_(self, state):
             self._state = str(state)
-            self.setNeedsDisplay_(True)
+            if self._skin == "robot":
+                self._robot_refresh(True)
+            else:
+                self.setNeedsDisplay_(True)
 
         @objc.python_method
         def set_motion(self, phase, pupil, blink_extra):
             self._phase = float(phase)
             self._pupil = None if pupil is None else (float(pupil[0]), float(pupil[1]))
             self._blink_extra = float(blink_extra or 0.0)
+            if self._skin == "robot":
+                self._robot_refresh(False)
+            else:
+                self.setNeedsDisplay_(True)
+
+        def hitTest_(self, point):
+            if self._skin == "robot" and self._layout:
+                local = self.convertPoint_fromView_(point, self.superview())
+                bounds = self.bounds()
+                outline = self._layout.get("outline") or []
+                if outline and not point_in_frame(
+                    float(local.x),
+                    float(local.y),
+                    float(bounds.size.width),
+                    float(bounds.size.height),
+                    outline,
+                ):
+                    return None
+            return objc.super(EyeView, self).hitTest_(point)
+
+        @objc.python_method
+        def use_skin(self, skin):
+            self._skin = normalize_skin(skin)
+            self._layer_mode = False
+            self._layers = None
+            if self._skin != "robot":
+                self.setNeedsDisplay_(True)
+                return
+            self._layout = load_layout()
+            self._load_art()
+            if self._frame_image is None or self._iris_image is None:
+                print("iheye: robot art missing; using classic", file=sys.stderr)
+                self._skin = "classic"
+                self.setNeedsDisplay_(True)
+                return
+            try:
+                self._install_layers()
+            except Exception:
+                self._layer_mode = False
+                self._layers = None
+            self._robot_refresh(True)
+
+        @objc.python_method
+        def _load_art(self):
+            frame = NSImage.alloc().initWithContentsOfFile_(str(ASSETS / "frame.png"))
+            iris = NSImage.alloc().initWithContentsOfFile_(str(ASSETS / "iris.png"))
+            logical = panel_size("robot")
+            if frame is not None:
+                frame.setSize_((logical[0], logical[1]))
+            if iris is not None and self._layout:
+                home = self._layout.get("iris") or {}
+                iris.setSize_((logical[0] * float(home.get("w", 0.3)), logical[1] * float(home.get("h", 0.2))))
+            self._frame_image = frame
+            self._iris_image = iris
+
+        @objc.python_method
+        def _current_pose(self):
+            return robot_pose(
+                self._state,
+                self._phase,
+                pupil=self._pupil,
+                blink_extra=self._blink_extra,
+                layout=self._layout,
+            )
+
+        @objc.python_method
+        def _robot_refresh(self, state_changed):
+            if self._layout is None:
+                return
+            pose = self._current_pose()
+            if self._layer_mode and self._layers is not None:
+                changed = state_changed or pose.state != self._anim_state
+                self._sync_layers(pose, changed)
+                self._anim_state = pose.state
+                return
             self.setNeedsDisplay_(True)
 
+        @objc.python_method
+        def _iris_rect(self):
+            bounds = self.bounds()
+            home = (self._layout or {}).get("iris") or {}
+            width = float(bounds.size.width)
+            height = float(bounds.size.height)
+            w = width * float(home.get("w", 0.36))
+            h = height * float(home.get("h", 0.28))
+            x = width * float(home.get("x", 0.32))
+            # layout y grows downward; AppKit y grows upward
+            y = height - (float(home.get("y", 0.36)) + float(home.get("h", 0.28))) * height
+            return x, y, w, h
+
+        @objc.python_method
+        def _socket_rect(self):
+            bounds = self.bounds()
+            socket = (self._layout or {}).get("socket") or {}
+            width = float(bounds.size.width)
+            height = float(bounds.size.height)
+            cx = width * float(socket.get("cx", 0.5))
+            cy = height * (1.0 - float(socket.get("cy", 0.5)))
+            rx = width * float(socket.get("rx", 0.24))
+            ry = height * float(socket.get("ry", 0.16))
+            return cx, cy, rx, ry
+
+        @objc.python_method
+        def _install_layers(self):
+            from Quartz import (
+                CABasicAnimation,
+                CALayer,
+                CAShapeLayer,
+                CGColorCreateGenericRGB,
+                CGPathAddEllipseInRect,
+                CGPathCreateMutable,
+                CGRectMake,
+            )
+
+            self._quartz = {
+                "CABasicAnimation": CABasicAnimation,
+                "CGColorCreateGenericRGB": CGColorCreateGenericRGB,
+            }
+            bounds = self.bounds()
+            width = float(bounds.size.width)
+            height = float(bounds.size.height)
+            root = CALayer.layer()
+            root.setFrame_(NSMakeRect(0, 0, width, height))
+            root.setContentsScale_(2.0)
+            frame_layer = CALayer.layer()
+            frame_layer.setFrame_(NSMakeRect(0, 0, width, height))
+            frame_layer.setContentsScale_(2.0)
+            frame_cg = self._cgimage(self._frame_image)
+            iris_cg = self._cgimage(self._iris_image)
+            if frame_cg is None or iris_cg is None:
+                raise RuntimeError("robot art could not be decoded")
+            frame_layer.setContents_(frame_cg)
+            root.addSublayer_(frame_layer)
+
+            socket = CALayer.layer()
+            socket.setFrame_(NSMakeRect(0, 0, width, height))
+            cx, cy, rx, ry = self._socket_rect()
+            mask = CAShapeLayer.layer()
+            path = CGPathCreateMutable()
+            CGPathAddEllipseInRect(path, None, CGRectMake(cx - rx, cy - ry, rx * 2, ry * 2))
+            mask.setPath_(path)
+            mask.setFrame_(NSMakeRect(0, 0, width, height))
+            socket.setMask_(mask)
+
+            ix, iy, iw, ih = self._iris_rect()
+            holder = CALayer.layer()
+            holder.setBounds_(NSMakeRect(0, 0, max(iw, ih), max(iw, ih)))
+            holder.setPosition_((ix + iw / 2.0, iy + ih / 2.0))
+            holder.setContentsScale_(2.0)
+
+            glow = CALayer.layer()
+            glow.setBounds_(NSMakeRect(0, 0, iw, ih))
+            glow.setPosition_((max(iw, ih) / 2.0, max(iw, ih) / 2.0))
+            glow.setContentsScale_(2.0)
+            glow.setContents_(iris_cg)
+            holder.addSublayer_(glow)
+
+            ring_layers = []
+            ring_side = max(8.0, min(iw, ih))
+            holder_side = max(iw, ih)
+            for index, spec in enumerate(ring_specs("idle")):
+                ring = CALayer.layer()
+                ring.setBounds_(NSMakeRect(0, 0, ring_side, ring_side))
+                ring.setPosition_((holder_side / 2.0, holder_side / 2.0))
+                ring.setContentsScale_(2.0)
+                holder.addSublayer_(ring)
+                ring_layers.append((ring, index, spec))
+
+            core = CALayer.layer()
+            core_side = max(8.0, min(iw, ih) * 0.42)
+            core.setBounds_(NSMakeRect(0, 0, core_side, core_side))
+            core.setPosition_((max(iw, ih) / 2.0, max(iw, ih) / 2.0))
+            core.setContentsScale_(2.0)
+            core.setContents_(self._core_contents_image(core_side))
+            holder.addSublayer_(core)
+
+            tint = CALayer.layer()
+            tint.setBounds_(NSMakeRect(0, 0, iw, ih))
+            tint.setPosition_((max(iw, ih) / 2.0, max(iw, ih) / 2.0))
+            tint.setCornerRadius_(min(iw, ih) / 2.0)
+            holder.addSublayer_(tint)
+            socket.addSublayer_(holder)
+
+            lid_top = CALayer.layer()
+            lid_bottom = CALayer.layer()
+            color = CGColorCreateGenericRGB(METAL_LID[0], METAL_LID[1], METAL_LID[2], 1.0)
+            for lid in (lid_top, lid_bottom):
+                lid.setBackgroundColor_(color)
+                lid.setOpacity_(0.0)
+                socket.addSublayer_(lid)
+            root.addSublayer_(socket)
+
+            self.setLayer_(root)
+            self.setWantsLayer_(True)
+            # NSViewLayerContentsRedrawNever — the layers animate; drawRect stays idle.
+            self.setLayerContentsRedrawPolicy_(0)
+            self._layers = {
+                "holder": holder,
+                "rings": ring_layers,
+                "core": core,
+                "tint": tint,
+                "lid_top": lid_top,
+                "lid_bottom": lid_bottom,
+                "home": (ix + iw / 2.0, iy + ih / 2.0),
+                "socket": (cx, cy, rx, ry),
+            }
+            self._layer_mode = True
+
+        @objc.python_method
+        def _cgimage(self, image):
+            if image is None:
+                return None
+            return image.CGImageForProposedRect_context_hints_(None, None, None)
+
+        @objc.python_method
+        def _core_contents_image(self, side):
+            if self._core_contents is not None:
+                return self._core_contents
+            pixels = max(16, int(side * 2))
+            rep = NSBitmapImageRep.alloc().initWithBitmapDataPlanes_pixelsWide_pixelsHigh_bitsPerSample_samplesPerPixel_hasAlpha_isPlanar_colorSpaceName_bytesPerRow_bitsPerPixel_(
+                None, pixels, pixels, 8, 4, True, False, NSCalibratedRGBColorSpace, 0, 0
+            )
+            ctx = NSGraphicsContext.graphicsContextWithBitmapImageRep_(rep)
+            NSGraphicsContext.saveGraphicsState()
+            NSGraphicsContext.setCurrentContext_(ctx)
+            transform = NSAffineTransform.transform()
+            transform.scaleBy_(2.0)
+            transform.concat()
+            center = side / 2.0
+            for radius, alpha in ((side * 0.48, 0.18), (side * 0.28, 0.45), (side * 0.12, 0.95)):
+                NSColor.colorWithCalibratedWhite_alpha_(1.0, alpha).set()
+                NSBezierPath.bezierPathWithOvalInRect_(
+                    NSMakeRect(center - radius, center - radius, radius * 2, radius * 2)
+                ).fill()
+            NSGraphicsContext.restoreGraphicsState()
+            image = NSImage.alloc().initWithSize_((side, side))
+            image.addRepresentation_(rep)
+            self._core_contents = image.CGImageForProposedRect_context_hints_(None, None, None)
+            return self._core_contents
+
+        @objc.python_method
+        def _ring_contents(self, state, index, spec, side):
+            key = (state, index)
+            cached = self._ring_cache.get(key)
+            if cached is not None:
+                return cached
+            pixels = max(16, int(side * 2))
+            rep = NSBitmapImageRep.alloc().initWithBitmapDataPlanes_pixelsWide_pixelsHigh_bitsPerSample_samplesPerPixel_hasAlpha_isPlanar_colorSpaceName_bytesPerRow_bitsPerPixel_(
+                None, pixels, pixels, 8, 4, True, False, NSCalibratedRGBColorSpace, 0, 0
+            )
+            ctx = NSGraphicsContext.graphicsContextWithBitmapImageRep_(rep)
+            NSGraphicsContext.saveGraphicsState()
+            NSGraphicsContext.setCurrentContext_(ctx)
+            transform = NSAffineTransform.transform()
+            transform.scaleBy_(2.0)
+            transform.concat()
+            NSColor.clearColor().set()
+            NSBezierPath.fillRect_(NSMakeRect(0, 0, side, side))
+            rgba = spec.rgba
+            NSColor.colorWithCalibratedRed_green_blue_alpha_(rgba[0], rgba[1], rgba[2], rgba[3]).set()
+            radius = side * 0.5 * spec.radius
+            cx = cy = side / 2.0
+            span = math.tau / spec.dashes
+            path = NSBezierPath.alloc().init()
+            path.setLineWidth_(spec.width)
+            path.setLineCapStyle_(1)
+            steps = 3
+            for dash in range(spec.dashes):
+                a0 = dash * span
+                a1 = a0 + span * spec.duty
+                for step in range(steps):
+                    t0 = a0 + (a1 - a0) * step / steps
+                    t1 = a0 + (a1 - a0) * (step + 1) / steps
+                    p0 = NSMakePoint(cx + math.cos(t0) * radius, cy + math.sin(t0) * radius)
+                    p1 = NSMakePoint(cx + math.cos(t1) * radius, cy + math.sin(t1) * radius)
+                    if step == 0:
+                        path.moveToPoint_(p0)
+                    path.lineToPoint_(p1)
+            path.stroke()
+            NSGraphicsContext.restoreGraphicsState()
+            image = NSImage.alloc().initWithSize_((side, side))
+            image.addRepresentation_(rep)
+            contents = image.CGImageForProposedRect_context_hints_(None, None, None)
+            self._ring_cache[key] = contents
+            return contents
+
+        @objc.python_method
+        def _sync_layers(self, pose, state_changed):
+            layers = self._layers
+            quartz = self._quartz or {}
+            home_x, home_y = layers["home"]
+            layers["holder"].setPosition_((home_x + pose.iris_dx, home_y + pose.iris_dy))
+            self._place_lids(pose)
+            if not state_changed:
+                return
+            color = quartz["CGColorCreateGenericRGB"]
+            tint = layers["tint"]
+            rgb = pose.tint_rgb
+            tint.setBackgroundColor_(color(rgb[0], rgb[1], rgb[2], 1.0))
+            tint.setOpacity_(pose.tint_alpha)
+            layers["core"].setOpacity_(min(1.0, pose.breath * pose.glow))
+            self._animate_core(pose)
+            ix, iy, iw, ih = self._iris_rect()
+            ring_side = max(8.0, min(iw, ih))
+            for ring, index, _old in layers["rings"]:
+                spec = ring_specs(pose.state)[index]
+                contents = self._ring_contents(pose.state, index, spec, ring_side)
+                if contents is not None:
+                    ring.setContents_(contents)
+                self._animate_spin(ring, pose.spin_period / max(0.2, abs(spec.spin)), spec.spin < 0)
+
+        @objc.python_method
+        def _animate_spin(self, layer, period, reverse):
+            quartz = self._quartz or {}
+            animation = quartz["CABasicAnimation"].animationWithKeyPath_("transform.rotation.z")
+            turn = math.tau
+            animation.setFromValue_(0.0 if not reverse else turn)
+            animation.setToValue_(-turn if reverse else turn)
+            animation.setDuration_(max(0.4, float(period)))
+            animation.setRepeatCount_(1e6)
+            animation.setRemovedOnCompletion_(False)
+            layer.addAnimation_forKey_(animation, "spin")
+
+        @objc.python_method
+        def _animate_core(self, pose):
+            quartz = self._quartz or {}
+            animation = quartz["CABasicAnimation"].animationWithKeyPath_("opacity")
+            if pose.state == "thinking":
+                animation.setFromValue_(0.72)
+                animation.setToValue_(1.0)
+                animation.setDuration_(0.7)
+            else:
+                animation.setFromValue_(0.45)
+                animation.setToValue_(0.95)
+                animation.setDuration_(1.6)
+            animation.setAutoreverses_(True)
+            animation.setRepeatCount_(1e6)
+            animation.setRemovedOnCompletion_(False)
+            self._layers["core"].addAnimation_forKey_(animation, "breath")
+
+        @objc.python_method
+        def _place_lids(self, pose):
+            cx, cy, rx, ry = self._layers["socket"]
+            cover = (ry * 2.0) * max(0.0, min(1.0, pose.blink)) * 0.5
+            top = self._layers["lid_top"]
+            bottom = self._layers["lid_bottom"]
+            if cover < 0.4:
+                top.setOpacity_(0.0)
+                bottom.setOpacity_(0.0)
+                return
+            top.setOpacity_(1.0)
+            bottom.setOpacity_(1.0)
+            top.setFrame_(NSMakeRect(cx - rx, cy + ry - cover, rx * 2.0, cover))
+            bottom.setFrame_(NSMakeRect(cx - rx, cy - ry, rx * 2.0, cover))
+
+        @objc.python_method
+        def _paint_robot(self):
+            """Vector fallback when layer hosting is unavailable. Same ops as describe_frame."""
+            pose = self._current_pose()
+            bounds = self.bounds()
+            NSColor.clearColor().set()
+            NSBezierPath.fillRect_(bounds)
+            if self._frame_image is not None:
+                self._frame_image.drawInRect_fromRect_operation_fraction_(
+                    bounds, NSZeroRect, NSCompositingOperationSourceOver, 1.0
+                )
+            ctx = NSGraphicsContext.currentContext()
+            if ctx is not None:
+                ctx.saveGraphicsState()
+            cx, cy, rx, ry = self._socket_rect()
+            NSBezierPath.bezierPathWithOvalInRect_(
+                NSMakeRect(cx - rx, cy - ry, rx * 2, ry * 2)
+            ).addClip()
+            ix, iy, iw, ih = self._iris_rect()
+            if self._iris_image is not None:
+                self._iris_image.drawInRect_fromRect_operation_fraction_(
+                    NSMakeRect(ix + pose.iris_dx, iy + pose.iris_dy, iw, ih),
+                    NSZeroRect,
+                    NSCompositingOperationSourceOver,
+                    min(1.0, pose.glow),
+                )
+            center_x = ix + iw / 2.0 + pose.iris_dx
+            center_y = iy + ih / 2.0 + pose.iris_dy
+            # Rings and the core fit the short axis so a rotating circle stays in the almond.
+            minor = max(8.0, min(iw, ih))
+            for op in describe_frame(pose):
+                if op["op"] == "ring":
+                    self._stroke_ring(op, center_x, center_y, minor)
+                elif op["op"] == "core":
+                    radius = minor * 0.22 * op["scale"]
+                    NSColor.colorWithCalibratedWhite_alpha_(1.0, op["alpha"]).set()
+                    NSBezierPath.bezierPathWithOvalInRect_(
+                        NSMakeRect(center_x - radius, center_y - radius, radius * 2, radius * 2)
+                    ).fill()
+                elif op["op"] == "tint":
+                    rgb = op["rgb"]
+                    NSColor.colorWithCalibratedRed_green_blue_alpha_(
+                        rgb[0], rgb[1], rgb[2], op["alpha"] * 0.55
+                    ).set()
+                    NSBezierPath.bezierPathWithOvalInRect_(
+                        NSMakeRect(center_x - minor * 0.55, center_y - minor * 0.4, minor * 1.1, minor * 0.8)
+                    ).fill()
+                elif op["op"] == "lids":
+                    rgb = op["rgb"]
+                    NSColor.colorWithCalibratedRed_green_blue_alpha_(rgb[0], rgb[1], rgb[2], 0.96).set()
+                    cover = (ry * 2.0) * op["amount"] * 0.5
+                    NSBezierPath.fillRect_(NSMakeRect(cx - rx, cy + ry - cover, rx * 2, cover))
+                    NSBezierPath.fillRect_(NSMakeRect(cx - rx, cy - ry, rx * 2, cover))
+            if ctx is not None:
+                ctx.restoreGraphicsState()
+
+        @objc.python_method
+        def _stroke_ring(self, op, cx, cy, side):
+            rgba = op["rgba"]
+            NSColor.colorWithCalibratedRed_green_blue_alpha_(rgba[0], rgba[1], rgba[2], rgba[3]).set()
+            radius = side * 0.5 * op["radius"]
+            span = math.tau / max(1, int(op["dashes"]))
+            duty = float(op["duty"])
+            rotation = float(op["rotation"])
+            path = NSBezierPath.alloc().init()
+            path.setLineWidth_(float(op["width"]))
+            path.setLineCapStyle_(1)
+            steps = 3
+            for dash in range(int(op["dashes"])):
+                a0 = rotation + dash * span
+                a1 = a0 + span * duty
+                for step in range(steps):
+                    t0 = a0 + (a1 - a0) * step / steps
+                    t1 = a0 + (a1 - a0) * (step + 1) / steps
+                    p0 = NSMakePoint(cx + math.cos(t0) * radius, cy + math.sin(t0) * radius)
+                    p1 = NSMakePoint(cx + math.cos(t1) * radius, cy + math.sin(t1) * radius)
+                    if step == 0:
+                        path.moveToPoint_(p0)
+                    path.lineToPoint_(p1)
+            path.stroke()
+
         def drawRect_(self, _dirty):
+            if self._skin == "robot":
+                if not self._layer_mode:
+                    self._paint_robot()
+                return
             bounds = self.bounds()
             NSColor.clearColor().set()
             NSBezierPath.fillRect_(bounds)
@@ -321,6 +803,8 @@ def run_overlay(args, host: HostInfo) -> int:
             self.field = None
             self.yes = None
             self.no = None
+            self.look_button = None
+            self.note = None
             self.server = None
             self.host = host
             self.querying = False
@@ -328,6 +812,10 @@ def run_overlay(args, host: HostInfo) -> int:
             self.parent_pid = int(args.parent_pid)
             self.track = str(getattr(args, "track", "1")) != "0"
             self.summary_enabled = str(getattr(args, "summary", "1")) != "0"
+            self.look_enabled = str(getattr(args, "look", "1")) != "0"
+            self.look_pin = None
+            self.skin = skin
+            self.panel_w, self.panel_h = eye_w, eye_h
             self._state = "idle"
             self._state_t0 = time.monotonic()
             self._last_tick = self._state_t0
@@ -425,6 +913,10 @@ def run_overlay(args, host: HostInfo) -> int:
                     self.summary_text = ""
                     self._summary_showing = False
                 changed = True
+            if "look_enabled" in msg:
+                self.look_enabled = bool(msg.get("look_enabled"))
+                self._refresh_look_button()
+                changed = True
             if changed:
                 self._sync_drop()
 
@@ -442,8 +934,11 @@ def run_overlay(args, host: HostInfo) -> int:
             mouse_moved = now < self._mouse_moved_until
             eye_frame = self.panel.frame() if self.panel is not None else None
             if eye_frame is not None:
-                cx = float(eye_frame.origin.x) + PANEL_W / 2.0
-                cy = float(eye_frame.origin.y) + 58.0
+                cx = float(eye_frame.origin.x) + self.panel_w / 2.0
+                if self.skin == "robot":
+                    cy = float(eye_frame.origin.y) + self.panel_h / 2.0
+                else:
+                    cy = float(eye_frame.origin.y) + 58.0
             else:
                 cx, cy = mx, my
             near = pointer_near(mx, my, cx, cy)
@@ -507,6 +1002,7 @@ def run_overlay(args, host: HostInfo) -> int:
                 pointer_near_eye=near,
                 mouse_moved=mouse_moved,
                 typing=typing and self.track,
+                skin=self.skin,
             )
             self._arm(interval)
 
@@ -591,8 +1087,8 @@ def run_overlay(args, host: HostInfo) -> int:
             x, y = drop_origin(
                 float(eye.origin.x),
                 float(eye.origin.y),
-                PANEL_W,
-                PANEL_H,
+                self.panel_w,
+                self.panel_h,
                 width,
                 height,
                 sx,
@@ -606,6 +1102,8 @@ def run_overlay(args, host: HostInfo) -> int:
             frames = layout_drop(self._mode, width, height)
             _place_view(self.reply, frames.get("reply"))
             _place_view(self.field, frames.get("field"))
+            _place_view(self.look_button, frames.get("look"))
+            _place_view(self.note, frames.get("note"))
             _place_view(self.yes, frames.get("yes"))
             _place_view(self.no, frames.get("no"))
 
@@ -684,8 +1182,107 @@ def run_overlay(args, host: HostInfo) -> int:
             if not text:
                 return
             self.field.setStringValue_("")
-            self.server.send({"cmd": "chat", "text": text})
+            self._look_then_send(text)
+
+        def toggleLook_(self, _sender):
+            self._cycle_look()
+
+        @objc.python_method
+        def _should_look(self, text):
+            return should_capture(
+                text,
+                enabled=bool(self.look_enabled),
+                pin=self.look_pin,
+            )
+
+        @objc.python_method
+        def _capture_target(self):
+            front = _frontmost()
+            if front is not None and int(front.pid) != os.getpid():
+                return FrontTarget(front.pid, front.name, front.bundle_id)
+            prev = self._previous_app
+            if prev is not None:
+                try:
+                    return FrontTarget(
+                        int(prev.processIdentifier()),
+                        str(prev.localizedName() or ""),
+                        str(prev.bundleIdentifier() or ""),
+                    )
+                except Exception:
+                    return None
+            return None
+
+        @objc.python_method
+        def _look_then_send(self, text):
+            """Capture only for this send. Never from the animation timer."""
+            if not self._should_look(text):
+                self._deliver_chat(text, None)
+                return
+            target = self._capture_target()
+            if target is None:
+                self._deliver_chat(text, None)
+                return
+            if self.field is not None:
+                self.field.setEnabled_(False)
+            image_path = os.path.join(
+                tempfile.gettempdir(),
+                f"hfagent-iheye-look-{os.getpid()}.png",
+            )
+
+            def work(target=target, image_path=image_path, text=text):
+                capture = None
+                try:
+                    capture = capture_front_native(
+                        target,
+                        self.host,
+                        image_path,
+                        helper_pid=os.getpid(),
+                    )
+                except Exception:
+                    capture = None
+                AppHelper.callAfter(self._deliver_chat, text, capture)
+
+            threading.Thread(target=work, name="iheye-look", daemon=True).start()
+
+        @objc.python_method
+        def _deliver_chat(self, text, capture):
+            if self.field is not None:
+                self.field.setEnabled_(True)
+            if self.server is None:
+                self._restore_front()
+                return
+            payload = {"cmd": "chat", "text": text}
+            indicator = ""
+            if capture is not None:
+                hint = str(getattr(capture, "hint", "") or "").strip()
+                if hint:
+                    print(hint, file=sys.stderr)
+                    self.server.send({"cmd": "hint", "text": hint})
+                public = capture.public() if hasattr(capture, "public") else {}
+                if public and not public.get("skipped"):
+                    payload["look"] = public
+                indicator = capture_indicator(capture)
+            if self.note is not None:
+                self.note.setStringValue_(indicator)
+            self.server.send(payload)
             self._restore_front()
+
+        @objc.python_method
+        def _cycle_look(self):
+            if not self.look_enabled:
+                self._refresh_look_button()
+                return
+            self.look_pin = cycle_look_pin(self.look_pin)
+            self._refresh_look_button()
+
+        @objc.python_method
+        def _refresh_look_button(self):
+            if self.look_button is None:
+                return
+            if not self.look_enabled:
+                self.look_button.setTitle_("👁 off")
+                return
+            self.look_button.setTitle_(look_button_title(self.look_pin))
 
         def dismissHover_(self, _sender):
             self._suppressed = True
@@ -827,7 +1424,9 @@ def run_overlay(args, host: HostInfo) -> int:
         application = NSApplication.sharedApplication()
         application.setActivationPolicy_(NSApplicationActivationPolicyAccessory)
 
-        x, y = _place_panel(str(args.position))
+        skin = _overlay_skin(args)
+        eye_w, eye_h = panel_size(skin)
+        x, y = _place_panel(str(args.position), eye_w, eye_h)
         style = NSWindowStyleMaskBorderless | NSWindowStyleMaskNonactivatingPanel
         behavior = (
             NSWindowCollectionBehaviorCanJoinAllSpaces
@@ -836,7 +1435,7 @@ def run_overlay(args, host: HostInfo) -> int:
             | NSWindowCollectionBehaviorIgnoresCycle
         )
         panel = NSPanel.alloc().initWithContentRect_styleMask_backing_defer_(
-            NSMakeRect(x, y, PANEL_W, PANEL_H),
+            NSMakeRect(x, y, eye_w, eye_h),
             style,
             NSBackingStoreBuffered,
             False,
@@ -854,7 +1453,8 @@ def run_overlay(args, host: HostInfo) -> int:
         panel.setMovableByWindowBackground_(False)
 
         controller = EyeController.alloc().init()
-        view = EyeView.alloc().initWithFrame_(NSMakeRect(0, 0, PANEL_W, PANEL_H))
+        view = EyeView.alloc().initWithFrame_(NSMakeRect(0, 0, eye_w, eye_h))
+        view.use_skin(skin)
         view.onClick = lambda: controller.focusHost_(None)
         view.onDrag = lambda _px, _py: controller.followDrag()
         view.onDragEnd = lambda px, py: save_position(args.position, px, py)
@@ -895,8 +1495,16 @@ def run_overlay(args, host: HostInfo) -> int:
         field.setDelegate_(controller)
         yes = _button("y", "approveYes:")
         no = _button("N", "approveNo:")
+        look = _button("👁", "toggleLook:")
+        look.setToolTip_("Use what I'm viewing")
+        look.setFont_(NSFont.systemFontOfSize_(12))
+        note = _label()
+        note.setFont_(NSFont.systemFontOfSize_(11))
+        note.setTextColor_(NSColor.colorWithCalibratedWhite_alpha_(0.72, 1))
         drop_view.addSubview_(reply)
         drop_view.addSubview_(field)
+        drop_view.addSubview_(look)
+        drop_view.addSubview_(note)
         drop_view.addSubview_(yes)
         drop_view.addSubview_(no)
         drop.setContentView_(drop_view)
@@ -906,6 +1514,9 @@ def run_overlay(args, host: HostInfo) -> int:
         controller.field = field
         controller.yes = yes
         controller.no = no
+        controller.look_button = look
+        controller.note = note
+        controller._refresh_look_button()
         panel.orderOut_(None)
         drop.orderOut_(None)
 
@@ -954,7 +1565,15 @@ def run_overlay(args, host: HostInfo) -> int:
         return 0
 
 
-def _place_panel(position_path: str) -> tuple[float, float]:
+def _overlay_skin(args) -> str:
+    skin = resolve_skin(getattr(args, "skin", None))
+    if skin == "robot" and not assets_ready():
+        print("iheye: robot skin assets missing; using classic", file=sys.stderr)
+        return "classic"
+    return skin
+
+
+def _place_panel(position_path: str, eye_w: float, eye_h: float) -> tuple[float, float]:
     from AppKit import NSScreen
 
     screen = NSScreen.mainScreen()
@@ -967,7 +1586,7 @@ def _place_panel(position_path: str) -> tuple[float, float]:
     height = float(frame.size.height)
     saved = load_position(position_path)
     if saved is None:
-        return default_position(origin_x, origin_y, width, height, PANEL_W, PANEL_H)
+        return default_position(origin_x, origin_y, width, height, eye_w, eye_h)
     return clamp_position(
-        saved[0], saved[1], origin_x, origin_y, width, height, PANEL_W, PANEL_H
+        saved[0], saved[1], origin_x, origin_y, width, height, eye_w, eye_h
     )

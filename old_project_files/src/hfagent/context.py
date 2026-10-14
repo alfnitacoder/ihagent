@@ -26,6 +26,16 @@ def estimate_message_tokens(message: dict[str, Any]) -> int:
     content = message.get("content")
     if isinstance(content, str):
         total += estimate_text_tokens(content)
+    elif isinstance(content, list):
+        for part in content:
+            if isinstance(part, str):
+                total += estimate_text_tokens(part)
+            elif isinstance(part, dict) and part.get("type") == "image_url":
+                total += 2000
+            elif isinstance(part, dict):
+                total += estimate_text_tokens(str(part.get("text") or ""))
+            else:
+                total += estimate_text_tokens(str(part or ""))
     elif content is not None:
         total += estimate_text_tokens(str(content))
     for call in message.get("tool_calls") or []:

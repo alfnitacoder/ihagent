@@ -605,7 +605,7 @@ def test_iheye_command_persists_and_reports(monkeypatch, tmp_path):
     assert "HFAGENT_IHEYE=1" in env_path.read_text(encoding="utf-8")
     assert os.environ["HFAGENT_IHEYE"] == "1"
     assert "macOS" in message or message == "iheye on"
-    assert handle_command("sideways") == "usage: /iheye on|off | track on|off | summary on|off"
+    assert handle_command("sideways") == "usage: /iheye on|off | track on|off | summary on|off | look on|off"
     monkeypatch.setenv("HFAGENT_IHEYE", "0")
     assert "HFAGENT_IHEYE=0" in status_text()
 
@@ -808,7 +808,7 @@ def test_track_and_summary_commands_persist(monkeypatch, tmp_path):
     assert handle_command("summary off") == "iheye summary off"
     assert "HFAGENT_IHEYE_SUMMARY=0" in env_path.read_text(encoding="utf-8")
     assert handle_command("summary on") == "iheye summary on"
-    assert handle_command("track maybe") == "usage: /iheye on|off | track on|off | summary on|off"
+    assert handle_command("track maybe") == "usage: /iheye on|off | track on|off | summary on|off | look on|off"
     report = format_config_report(Config.load())
     assert "iheye_track=" in report
     assert "iheye_summary=" in report

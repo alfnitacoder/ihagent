@@ -46,7 +46,7 @@ HELP = """\
 /memory           show what the agent remembers long-term
 /skills           list coding skills (builtin + ~/.hfagent/skills)
 /browser [action] status of the ihagent Chrome, or close it
-/iheye [on|off|track|summary]  floating eye, hover chat, completion card (macOS)
+/iheye [on|off|track|summary|look]  floating eye, hover chat, completion card (macOS)
 /forget           wipe long-term memory
 /cloud            use Ollama Cloud (saved for the next launch)
 /local            use Ollama on this PC (saved for the next launch)

@@ -70,6 +70,21 @@ def is_internal_nudge(text: str) -> bool:
     return any(p in stripped for p in NUDGE_PREFIXES)
 
 
+def plain_message_text(content: object) -> str:
+    """User or assistant text, including the text parts of a look capture."""
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        bits: list[str] = []
+        for item in content:
+            if isinstance(item, str):
+                bits.append(item)
+            elif isinstance(item, dict) and item.get("type") == "text":
+                bits.append(str(item.get("text") or ""))
+        return "\n".join(bits)
+    return ""
+
+
 def _norm_text(text: str) -> str:
     return " ".join(text.split())
 
@@ -206,11 +221,16 @@ class TurnDone(Message):
 
 
 class EyeChatMsg(Message):
-    """A line typed in the iheye hover panel, as if it was the composer."""
+    """A line typed in the iheye hover panel, as if it was the composer.
 
-    def __init__(self, text: str) -> None:
+    ``prompt`` is what the model sees. It can be longer than ``text`` when
+    iheye attached the front app, and it stays ``None`` for a plain line.
+    """
+
+    def __init__(self, text: str, prompt=None) -> None:
         super().__init__()
         self.text = text
+        self.prompt = prompt
 
 
 class EyeApprovalMsg(Message):
@@ -811,13 +831,21 @@ class HfAgentApp(App):
 
         app = self
 
-        def on_chat(text: str) -> None:
-            app.post_message(EyeChatMsg(text))
+        def on_chat(text: str, prompt=None) -> None:
+            app.post_message(EyeChatMsg(text, prompt))
 
         def on_approval(yes: bool) -> None:
             app.post_message(EyeApprovalMsg(yes))
 
         bind_handlers(on_chat, on_approval)
+        try:
+            from ..iheye import get_supervisor
+
+            control = get_supervisor()
+            control.model_name = app.agent.config.model
+            control.model_base = app.agent.config.base_url
+        except Exception:
+            pass
 
     def _probe_device(self) -> None:
         from ..runtime import infer_device
@@ -1049,14 +1077,14 @@ class HfAgentApp(App):
             if role == "system":
                 continue
             if role == "user":
-                text = message.get("content") or ""
-                if is_internal_nudge(text):
+                text = plain_message_text(message.get("content"))
+                if not text.strip() or is_internal_nudge(text):
                     continue
                 has_turn = True
                 last_assistant = ""
                 await self.mount_user(text)
             elif role == "assistant":
-                content = collapse_repeated_lines(message.get("content") or "")
+                content = collapse_repeated_lines(plain_message_text(message.get("content")))
                 if content.strip() and _norm_text(content) != last_assistant:
                     last_assistant = _norm_text(content)
                     has_turn = True
@@ -1291,17 +1319,18 @@ class HfAgentApp(App):
         text = (event.text or "").strip()
         if not text:
             return
+        prompt = text if event.prompt is None else event.prompt
         if self._busy:
             if text.startswith("/") and not is_stop_message(text):
                 self.set_status("still working — type a note, or stop")
                 return
-            self.agent.steer(text)
+            self.agent.steer(prompt)
             self.run_worker(partial(self._show_steer, text))
             return
         if text.startswith("/"):
             self.run_worker(partial(self._handle_slash, text))
             return
-        self.run_worker(partial(self._submit_turn, text))
+        self.run_worker(partial(self._submit_turn, text, prompt))
 
     def on_eye_approval_msg(self, event: EyeApprovalMsg) -> None:
         if isinstance(self.screen, ApprovalModal):
@@ -1322,9 +1351,9 @@ class HfAgentApp(App):
         else:
             self.set_status("noted — it will read this and continue")
 
-    async def _submit_turn(self, text: str) -> None:
+    async def _submit_turn(self, text: str, prompt=None) -> None:
         await self.mount_user(text)
-        self._start_turn(text)
+        self._start_turn(text if prompt is None else prompt)
 
     async def _handle_slash(self, text: str) -> None:
         result = dispatch_slash(self.agent, self.agent.ui, text)

@@ -14,7 +14,11 @@ dependencies = [
 [project.optional-dependencies]
 dev = ["pytest>=8.0"]
 browser = ["playwright>=1.49"]
-iheye = ["pyobjc-framework-Cocoa>=11.0; sys_platform == 'darwin'"]
+iheye = [
+  "pyobjc-framework-Cocoa>=11.0; sys_platform == 'darwin'",
+  "pyobjc-framework-Quartz>=11.0; sys_platform == 'darwin'",
+  "pyobjc-framework-Vision>=11.0; sys_platform == 'darwin'",
+]
 
 [project.scripts]
 hfagent = "hfagent.cli:main"
@@ -29,6 +33,9 @@ packages = ["src/hfagent"]
 
 [tool.hatch.build.targets.wheel.force-include]
 "src/hfagent/builtin_skills" = "hfagent/builtin_skills"
+"src/hfagent/iheye/assets/frame.png" = "hfagent/iheye/assets/frame.png"
+"src/hfagent/iheye/assets/iris.png" = "hfagent/iheye/assets/iris.png"
+"src/hfagent/iheye/assets/layout.json" = "hfagent/iheye/assets/layout.json"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
