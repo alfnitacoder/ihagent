@@ -6,6 +6,8 @@ from typing import Literal
 
 from .agent import Agent, AgentUI
 from .config import (
+    ANTHROPIC_BASE_URL,
+    ANTHROPIC_DEFAULT_MODEL,
     OLLAMA_BASE_URL,
     _api_key_for,
     env_name_for_api_key,
@@ -32,6 +34,7 @@ HELP = """\
 /forget           wipe long-term memory
 /cloud            use Ollama Cloud (saved for the next launch)
 /local            use Ollama on this PC (saved for the next launch)
+/claude           use Anthropic (Claude) — needs ANTHROPIC_API_KEY
 /model <name|#| > switch model (name, unique part, or list number)
 /model_api=<key>  paste an Ollama Cloud or Hugging Face key (saved, not shown)
 /sessions         list saved sessions
@@ -158,8 +161,15 @@ def dispatch_slash(agent: Agent, ui: AgentUI, line: str) -> SlashResult:
         _switch_host(agent, ui, command[1:])
         return "handled"
 
+    if command == "/claude":
+        _switch_to_anthropic(agent, ui)
+        return "handled"
+
     if command == "/host":
-        _switch_host(agent, ui, arg)
+        if arg.strip().lower() in ("anthropic", "claude"):
+            _switch_to_anthropic(agent, ui)
+        else:
+            _switch_host(agent, ui, arg)
         return "handled"
 
     if command == "/model":
@@ -221,6 +231,26 @@ def _switch_host(agent: Agent, ui: AgentUI, kind: str) -> None:
         ui.on_status(f"host: {kind} — press f2 to choose a model")
     else:
         ui.on_status(f"host: {kind} · model: {model}")
+
+
+def _switch_to_anthropic(agent: Agent, ui: AgentUI) -> None:
+    """Point the agent at Anthropic's OpenAI-compatible endpoint (Claude)."""
+    import os
+
+    base = ANTHROPIC_BASE_URL
+    key = _api_key_for(base)
+    model = os.environ.get("HFAGENT_MODEL", "")
+    if "claude" not in model.lower():
+        model = ANTHROPIC_DEFAULT_MODEL
+    agent.retarget(base_url=base, api_key=key, model=model)
+    os.environ["HF_BASE_URL"] = base
+    os.environ["HFAGENT_MODEL"] = model
+    save_base_url(base)
+    save_selected_model(model)
+    if not key:
+        ui.on_status("host: claude — paste your Anthropic key as /model_api=...")
+    else:
+        ui.on_status(f"host: claude · model: {model} — press f2 to pick another")
 
 
 def _apply_pasted_key(agent: Agent, ui: AgentUI, key: str) -> None:

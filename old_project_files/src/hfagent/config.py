@@ -19,6 +19,7 @@ def _load_dotenv() -> None:
         "hf_api_key": "HF_API_KEY",
         "hf_base_url": "HF_BASE_URL",
         "hfagent_model": "HFAGENT_MODEL",
+        "anthropic_api_key": "ANTHROPIC_API_KEY",
     }
 
     def apply(path: Path, *, override: bool) -> None:
@@ -49,6 +50,8 @@ def _load_dotenv() -> None:
     apply(Path.home() / ".hfagent" / ".env", override=False)
 
 def _api_key_for(base_url: str) -> str:
+    if "api.anthropic.com" in base_url:
+        return os.environ.get("ANTHROPIC_API_KEY") or ""
     if "ollama.com" in base_url:
         return (
             os.environ.get("OLLAMA_API_KEY")
@@ -103,7 +106,9 @@ def save_base_url(base_url: str, path: Path | None = None) -> Path:
 
 
 def host_label(base_url: str) -> str:
-    """Short name for the header: cloud, local, router, gpu, or custom."""
+    """Short name for the header: cloud, local, router, gpu, claude, or custom."""
+    if "api.anthropic.com" in base_url:
+        return "claude"
     if "11434" in base_url:
         return "local"
     if "ollama.com" in base_url:
@@ -133,6 +138,8 @@ def save_host_model(kind: str, model: str, path: Path | None = None) -> Path | N
 
 def env_name_for_api_key(base_url: str) -> str:
     """Which .env variable holds the key for this host."""
+    if "api.anthropic.com" in base_url:
+        return "ANTHROPIC_API_KEY"
     if "huggingface.co" in base_url:
         return "HF_TOKEN"
     return "OLLAMA_API_KEY"
@@ -177,6 +184,10 @@ def list_model_names(base_url: str, api_key: str = "") -> list[str]:
         urls.append(origin.rstrip("/") + "/api/tags")
     urls.append(host + "/models")
     headers = {"Authorization": f"Bearer {api_key}"} if api_key else {}
+    if "api.anthropic.com" in host and api_key:
+        # Anthropic's models endpoint authenticates with x-api-key, not Bearer.
+        headers["x-api-key"] = api_key
+        headers["anthropic-version"] = "2023-06-01"
     for url in urls:
         try:
             with urlopen(Request(url, headers=headers), timeout=8) as resp:
@@ -186,6 +197,8 @@ def list_model_names(base_url: str, api_key: str = "") -> list[str]:
         names = names_from_model_payload(payload)
         if names:
             return names
+    if "api.anthropic.com" in host:
+        return list(ANTHROPIC_FALLBACK_MODELS)
     return []
 
 
@@ -253,6 +266,15 @@ DEFAULT_MODEL = "Qwen/Qwen2.5-Coder-32B-Instruct"
 DEFAULT_BASE_URL = "https://router.huggingface.co/v1"
 LOCAL_BASE_URL = "http://127.0.0.1:1234/v1"
 OLLAMA_BASE_URL = "http://127.0.0.1:11434/v1"
+ANTHROPIC_BASE_URL = "https://api.anthropic.com/v1"
+ANTHROPIC_DEFAULT_MODEL = "claude-sonnet-5-5"
+# Offline fallback for the model picker; the live /models list is used when
+# reachable, so new model IDs appear automatically via f2.
+ANTHROPIC_FALLBACK_MODELS = [
+    "claude-sonnet-5-5",
+    "claude-opus-5-5",
+    "claude-haiku-4-5-20251001",
+]
 DEFAULT_LOCAL_MODEL = (
     "~/.cache/huggingface/mlx/qwen2.5-0.5b-4bit"
 )

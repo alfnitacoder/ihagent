@@ -380,18 +380,23 @@ def _shell_rules() -> str:
     )
 
 
-def system_prompt() -> str:
+def system_prompt(base_url: str = "") -> str:
     env = (
         f"Environment: {platform.system()} {platform.release()}, "
         f"cwd={Path.cwd()}"
     )
     parts = [env, _shell_rules(), SYSTEM_PROMPT]
-    memory = load_memory().strip()
-    if memory:
-        parts.append(
-            "Persistent memory from previous sessions (hosts, preferences, "
-            "context - trust this):\n" + memory
-        )
+    # Anthropic's content filter rejects the entire request when the system
+    # prompt carries flagged material. The user's persistent memory can hold
+    # offensive-security notes, so omit it on the Claude host (it stays
+    # available for Ollama / HF hosts).
+    if "api.anthropic.com" not in base_url:
+        memory = load_memory().strip()
+        if memory:
+            parts.append(
+                "Persistent memory from previous sessions (hosts, preferences, "
+                "context - trust this):\n" + memory
+            )
     skills = format_skills_for_prompt()
     if skills:
         parts.append(skills)
@@ -433,7 +438,7 @@ class Agent:
             max_retries=2,
         )
         self.messages: list[dict[str, Any]] = [
-            {"role": "system", "content": system_prompt()}
+            {"role": "system", "content": system_prompt(config.base_url)}
         ]
         self._native_tools = True
         self._inbox: queue.Queue[str] = queue.Queue()
@@ -452,6 +457,13 @@ class Agent:
             timeout=120,
             max_retries=2,
         )
+        # Rebuild the system message for the new host (memory is host-aware:
+        # omitted on Claude so its content filter does not reject the turn).
+        if self.messages and self.messages[0].get("role") == "system":
+            self.messages[0] = {
+                "role": "system",
+                "content": system_prompt(base_url),
+            }
         self.device = "…"
 
     def steer(self, text: str) -> None:
@@ -505,7 +517,9 @@ class Agent:
         ] + [m for m in history if m.get("role") != "system"]
 
     def reset(self) -> None:
-        self.messages = [{"role": "system", "content": system_prompt()}]
+        self.messages = [
+            {"role": "system", "content": system_prompt(self.config.base_url)}
+        ]
 
     # ------------------------------------------------------------------- loop
 
@@ -533,6 +547,7 @@ class Agent:
         tool_used = False
         auto = self.config.approval == "auto"
         self._repeat_fail = {"sig": None, "n": 0}
+        write_targets: dict[str, int] = {}
 
         def roll_back(reason: str) -> str:
             """Discard the poisoned exchange so history stays clean."""
@@ -563,6 +578,35 @@ class Agent:
                     # proposal budget for the whole task.
                     nudges["proposal"] = 0
                     nudges["empty"] = 0
+                    # Runaway-write guard: a model that keeps rewriting the
+                    # same file in one turn (e.g. misreading "open it" as
+                    # "keep extending the poem") grows the content each call,
+                    # so its tool signature changes every time and the
+                    # error/identical-output guards below never fire.
+                    for _c in message["tool_calls"]:
+                        _fn = _c.get("function", {})
+                        if _fn.get("name") in ("write_file", "edit_file"):
+                            try:
+                                _p = json.loads(
+                                    _fn.get("arguments") or "{}"
+                                ).get("path", "")
+                            except json.JSONDecodeError:
+                                _p = ""
+                            if _p:
+                                write_targets[_p] = write_targets.get(_p, 0) + 1
+                    if any(n >= 3 for n in write_targets.values()):
+                        self.ui.on_status(
+                            "same file rewritten repeatedly - stopping the loop"
+                        )
+                        done = finish(
+                            "Stopped: I kept rewriting the same file without a "
+                            "new instruction, so I halted the loop. The file is "
+                            "saved as-is. Tell me the specific change you want."
+                        )
+                        if done is None:
+                            write_targets.clear()
+                            continue
+                        return done
                     if self._repeat_fail.get("n", 0) >= 5:
                         return roll_back(
                             "model kept retrying the same failing tool "
@@ -834,16 +878,23 @@ class Agent:
         return cleaned
 
     def _create_completion(self, *, tools: bool, include_usage: bool = True):
+        anthropic = "api.anthropic.com" in self.config.base_url
         kwargs: dict[str, Any] = {
             "model": self.config.model,
             "messages": self._sanitize_messages(self.messages),
             "stream": True,
-            "temperature": self.config.temperature,
         }
+        if not anthropic:
+            # Recent Claude models (5.x) reject `temperature` as deprecated.
+            kwargs["temperature"] = self.config.temperature
         if include_usage:
             kwargs["stream_options"] = {"include_usage": True}
         if tools:
             kwargs["tools"] = self.registry.specs()
+        if anthropic:
+            # Anthropic's API requires max_tokens; the OpenAI-compat layer has
+            # no implicit default, so set a generous cap for agent replies.
+            kwargs.setdefault("max_tokens", 8192)
         try:
             return self.client.chat.completions.create(**kwargs)
         except Exception as exc:

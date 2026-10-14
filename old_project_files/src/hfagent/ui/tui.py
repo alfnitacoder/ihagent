@@ -256,6 +256,42 @@ class Composer(Input):
         self.history: list[str] = []
         self._index: int | None = None
         self._draft = ""
+        self._pastes: dict[str, str] = {}
+        self._paste_seq = 0
+
+    def _on_paste(self, event: events.Paste) -> None:
+        """Keep the whole paste. A single-line Input otherwise drops all but line 1."""
+        event.prevent_default()  # stop the base Input handler from inserting line 1 too
+        text = event.text
+        try:
+            import os as _os
+            _p = _os.path.expanduser("~/.hfagent/paste-debug.log")
+            with open(_p, "a", encoding="utf-8") as _fh:
+                _fh.write(repr(text) + "\n")
+        except Exception:
+            pass
+        if not text:
+            event.stop()
+            return
+        if "\n" not in text and "\r" not in text:
+            chunk = text
+        else:
+            self._paste_seq += 1
+            n = len(text.splitlines())
+            chunk = f"[#{self._paste_seq} pasted {n} lines]"
+            self._pastes[chunk] = text
+        selection = self.selection
+        if selection.is_empty:
+            self.insert_text_at_cursor(chunk)
+        else:
+            self.replace(chunk, *selection)
+        event.stop()
+
+    def expand(self, value: str) -> str:
+        """Swap any paste placeholders back for their full multi-line text."""
+        for token, full in self._pastes.items():
+            value = value.replace(token, full)
+        return value
 
     def remember(self, text: str) -> None:
         if text and (not self.history or self.history[-1] != text):
@@ -885,20 +921,21 @@ class HfAgentApp(App):
 
     @on(Composer.Submitted, "#composer")
     def on_composer_submitted(self, event: Input.Submitted) -> None:
-        text = event.value.strip()
         composer = self.query_one(Composer)
+        raw = event.value
+        text = composer.expand(raw).strip()
         if not text:
             return
         if self._busy:
             if text.startswith("/") and not is_stop_message(text):
                 self.set_status("still working — type a note, or stop")
                 return
-            composer.remember(text)
+            composer.remember(_history_line(raw))
             composer.value = ""
             self.agent.steer(text)
             self.run_worker(partial(self._show_steer, text))
             return
-        composer.remember(_history_line(text))
+        composer.remember(_history_line(raw))
         composer.value = ""
         if text.startswith("/"):
             self.run_worker(partial(self._handle_slash, text))
