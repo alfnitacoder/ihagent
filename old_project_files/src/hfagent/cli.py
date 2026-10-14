@@ -10,7 +10,7 @@ import sys
 from .agent import Agent, AgentUI
 from .commands import dispatch_slash
 from .config import DEFAULT_MODEL, Config, format_config_report
-from .sessions import load_session, save_session
+from .sessions import open_session, save_session
 from .tools import default_registry
 from .ui.console import ConsoleUI
 
@@ -184,7 +184,7 @@ def repl(agent: Agent, ui: ConsoleUI) -> None:
             busy["on"] = True
             try:
                 agent.run(user_input)
-                save_session(agent.messages, agent.config.model)
+                _autosave(agent)
             except Exception as exc:
                 from .agent import format_api_error
 
@@ -228,13 +228,24 @@ def _next_console_line(chats: queue.Queue[str]) -> str:
         return line.strip()
 
 
+def _autosave(agent: Agent) -> None:
+    """Update the active session file, or create one and remember its name."""
+    path = save_session(
+        agent.messages, agent.config.model, name=agent.session_name
+    )
+    agent.session_name = path.stem
+
+
 def handle_resume(agent: Agent, ui: AgentUI, name: str) -> None:
-    messages = load_session(name)
-    if not messages:
+    opened = open_session(name)
+    if not opened or not opened["messages"]:
         ui.on_error(f"session not found: {name}")
         return
-    agent.set_messages(messages)
-    ui.on_status(f"resumed session: {name} ({len(messages)} messages)")
+    agent.set_messages(opened["messages"])
+    agent.session_name = opened["name"]
+    ui.on_status(
+        f"resumed session: {opened['name']} ({len(opened['messages'])} messages)"
+    )
 
 
 def _start_iheye() -> None:
@@ -289,10 +300,11 @@ def main(argv: list[str] | None = None) -> None:
         if use_tui(args):
             agent, _ = make_agent(args, ui=AgentUI(), require_key=False)
             if args.resume:
-                messages = load_session(args.resume)
-                if not messages:
+                opened = open_session(args.resume)
+                if not opened or not opened["messages"]:
                     sys.exit(f"session not found: {args.resume}")
-                agent.set_messages(messages)
+                agent.set_messages(opened["messages"])
+                agent.session_name = opened["name"]
             try:
                 from .ui.tui import run_tui
             except ImportError:
@@ -310,7 +322,7 @@ def main(argv: list[str] | None = None) -> None:
         _start_iheye()
         if args.prompt:
             agent.run(args.prompt)
-            save_session(agent.messages, agent.config.model)
+            _autosave(agent)
             return
         if not isinstance(ui, ConsoleUI):
             ui = ConsoleUI()

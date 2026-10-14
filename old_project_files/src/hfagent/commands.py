@@ -27,7 +27,15 @@ from .config import (
     save_user_setting,
 )
 from .memory import clear_memory, load_memory
-from .sessions import delete_session, list_sessions, load_session
+from .sessions import (
+    delete_session,
+    format_session_listing,
+    list_sessions,
+    open_session,
+    rename_session,
+    session_exists,
+    toggle_session_flag,
+)
 from .skills import skills_index
 
 HELP = """\
@@ -48,18 +56,37 @@ HELP = """\
 /config           show effective settings and where each came from
 /model <name|#| > switch model (name, unique part, or list number)
 /model_api=<key>  paste an Ollama Cloud or Hugging Face key (saved, not shown)
-/sessions         list saved sessions
+/sessions [all]   list saved sessions (title, time, size). 'all' includes archived
+/search <text>    filter sessions by title, model, day, or id
+/rename <title>   rename the active session (kept to ~40 characters)
+/rename <id> <title>  rename that saved session instead
+/pin [name]       pin or unpin a session ('last' if no name)
+/archive [name]   archive or restore a session ('last' if no name)
 /delete [name]    delete a saved session ('last' if no name, or 'all')
 /resume [name]    load a saved session ('last' if no name given)
-/clear            reset the conversation
+/clear            reset the conversation (the next turn starts a new session)
 /exit, /quit      leave the agent
 
-TUI keys: /cloud or /local · f2 choose model · drag to copy · ctrl+shift+c copy · ctrl+b sidebar · ctrl+l clear · ctrl+q quit · up/down history
+TUI keys: /cloud or /local · f2 model · f3 sessions · drag to copy · ctrl+shift+c copy · ctrl+b sidebar · ctrl+l clear · ctrl+q quit · up/down history
+In the session list: enter resume · / search · r rename · p pin · a archive · x delete · esc back
 While a task runs: type a note and it is picked up on the next step. Type stop to cancel.
 Classic line REPL: ihagent --console
 """
 
 SlashResult = Literal["exit", "clear", "resume", "handled"]
+
+
+def _rename_target(arg: str, active: str | None) -> tuple[str, str] | None:
+    """``/rename title`` uses the active session; ``/rename <id> title`` is explicit."""
+    text = arg.strip()
+    if not text:
+        return None
+    head, sep, rest = text.partition(" ")
+    if sep and rest.strip() and session_exists(head):
+        return head, rest.strip()
+    if active:
+        return active, text
+    return None
 
 
 def pasted_api_key(line: str) -> tuple[bool, str]:
@@ -155,29 +182,81 @@ def dispatch_slash(agent: Agent, ui: AgentUI, line: str) -> SlashResult:
         if removed is None:
             ui.on_error("session not found")
         else:
+            if agent.session_name and (
+                removed == agent.session_name or arg.strip() == "all"
+            ):
+                agent.session_name = None
             ui.on_status(f"deleted {removed}")
         return "handled"
 
     if command == "/sessions":
-        sessions = list_sessions()
-        if not sessions:
-            ui.on_system("(no saved sessions)")
+        include_archived = arg.strip().lower() in ("all", "archived")
+        if arg.strip() and not include_archived:
+            ui.on_error("usage: /sessions [all]")
+            return "handled"
+        ui.on_system(
+            format_session_listing(
+                list_sessions(include_archived=True),
+                active=agent.session_name,
+                include_archived=include_archived,
+            )
+        )
+        return "handled"
+
+    if command == "/search":
+        query = arg.strip()
+        if not query:
+            ui.on_status("search cleared")
+            ui.on_system("usage: /search <text>")
+            return "handled"
+        ui.on_system(
+            format_session_listing(
+                list_sessions(include_archived=True),
+                active=agent.session_name,
+                query=query,
+            )
+        )
+        return "handled"
+
+    if command == "/rename":
+        target = _rename_target(arg, agent.session_name)
+        if target is None:
+            ui.on_error("usage: /rename <title>  or  /rename <id> <title>")
+            return "handled"
+        name, title = target
+        renamed = rename_session(name, title)
+        if renamed is None:
+            ui.on_error("session not found")
         else:
-            lines = [
-                f"{s['name']}  [{s['model'].split('/')[-1]}]  {s['preview']}"
-                for s in sessions
-            ]
-            ui.on_system("\n".join(lines))
+            ui.on_status(f"renamed session: {renamed}")
+        return "handled"
+
+    if command in ("/pin", "/archive"):
+        flag = "pinned" if command == "/pin" else "archived"
+        name = arg.strip() or agent.session_name or "last"
+        toggled = toggle_session_flag(name, flag)
+        if toggled is None:
+            ui.on_error("session not found")
+        else:
+            ident, value = toggled
+            if flag == "pinned":
+                verb = "pinned" if value else "unpinned"
+            else:
+                verb = "archived" if value else "restored"
+            ui.on_status(f"{verb} {ident}")
         return "handled"
 
     if command == "/resume":
         name = arg or "last"
-        messages = load_session(name)
-        if not messages:
+        opened = open_session(name)
+        if not opened or not opened["messages"]:
             ui.on_error(f"session not found: {name}")
             return "handled"
-        agent.set_messages(messages)
-        ui.on_status(f"resumed session: {name} ({len(messages)} messages)")
+        agent.set_messages(opened["messages"])
+        agent.session_name = opened["name"]
+        ui.on_status(
+            f"resumed session: {opened['name']} ({len(opened['messages'])} messages)"
+        )
         return "resume"
 
     if command in ("/cloud", "/local"):

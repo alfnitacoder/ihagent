@@ -70,14 +70,26 @@ Optional machine setup (from `old_project_files/`): `scripts/setup-machine.sh` c
 | :--- | :--- |
 | `f1` | `/help` |
 | `f2` | Model picker for the current host |
+| `f3` | Focus the session list |
 | `ctrl+b` | Toggle the sessions/tools sidebar |
-| `ctrl+l` | Clear the conversation |
+| `ctrl+l` | Clear the conversation (the next turn starts a new session) |
 | `ctrl+q` | Quit |
 | `ctrl+shift+c` | Copy the selection |
 | `up` / `down` | Input history |
 | `y` / `n` | Approve or deny a gated tool (`enter` approves, `escape` denies) |
 
-Click a session in the sidebar to resume it. While a turn is running, a typed note is picked up on the next step. The word `stop` cancels the turn.
+Click a session in the sidebar to resume it, or press `f3` and use the list keys. While a turn is running, a typed note is picked up on the next step. The word `stop` cancels the turn.
+
+| Key (session list focused) | Effect |
+| :--- | :--- |
+| `up` / `down` or `k` / `j` | Move between sessions. Day headers are skipped. |
+| `enter` | Resume the highlighted session |
+| `/` | Filter the list |
+| `r` | Rename the highlighted session |
+| `p` | Pin or unpin |
+| `a` | Archive or restore |
+| `x` | Delete the highlighted session |
+| `esc` | Back to the composer |
 
 ## Hosts
 
@@ -278,10 +290,14 @@ There is no environment variable for temperature. Pass `--temperature`.
 | `/memory` | Show long-term memory. |
 | `/forget` | Wipe long-term memory. |
 | `/skills` | List coding skills. |
-| `/sessions` | List saved sessions for this directory. |
+| `/sessions [all]` | List saved sessions. `all` includes archived ones. |
+| `/search <text>` | Filter sessions by title, model, day, or id. |
+| `/rename <title>` | Rename the active session (about 40 characters). `/rename <id> <title>` names a specific file. |
+| `/pin [name]` | Pin or unpin a session (`last` if omitted). |
+| `/archive [name]` | Archive or restore a session (`last` if omitted). |
 | `/resume [name]` | Load a session (`last` if omitted). |
 | `/delete [name\|all]` | Delete one session (`last` if omitted) or all of them. |
-| `/clear` | Reset the conversation. |
+| `/clear` | Reset the conversation. The next turn starts a new session file. |
 | `/exit`, `/quit` | Leave. |
 
 ## Tools and approvals
@@ -328,7 +344,13 @@ Skills are `SKILL.md` recipes injected into the system prompt. Project overrides
 
 The `remember` tool appends to `~/.hfagent/memory/memory.md` (or `$HFAGENT_MEMORY_PATH/memory.md`). That file is injected into new sessions, except on Anthropic, where it is left out of the system prompt. `/memory` shows it and `/forget` deletes it. The tool description tells the model not to store secrets or passwords. Entries longer than 6000 characters keep the newest tail.
 
-Each completed turn is saved under `~/.hfagent/sessions/<project>/` as `YYYYMMDD-HHMMSS.json`. Resume with `--resume` or `/resume`. `/sessions` shows the ten newest.
+A conversation is one file under `~/.hfagent/sessions/<project>/`. The first turn creates `YYYYMMDD-HHMMSS.json`; later turns update that file. `/clear` and `ctrl+l` end it, and the next message starts a new file. Older builds wrote a new file every turn. Those files still open.
+
+The sidebar titles each session from its first user message, trimmed to about 40 characters. `/rename` (or `r` on the highlighted row) stores a custom title on the file and keeps it across later saves. The same title is not repeated on every line: the first copy shows the title and a `×N` count, and the others show only the time, message count, and model.
+
+Rows are grouped under `Pinned`, `Today`, `Yesterday`, or a date such as `Oct 12`. Hover a row for the exact timestamp. The active session is marked `●`, a pinned one `★`. Archived sessions stay out of the list until `/search` matches them or you run `/sessions all`. The sidebar mounts a window of rows and loads more as you move toward the end. `/sessions` prints the same grouping, up to 40 sessions, and says when more are hidden.
+
+Resume with `--resume` or `/resume`. `last` is the session with the newest activity, including one you just continued.
 
 ## Self-hosting on Kaggle
 
@@ -387,7 +409,7 @@ ihagent --show-config
 | `context full — summarized …` | Expected on a long session. Lower or raise `HFAGENT_CONTEXT_TOKENS` to match the model. |
 | `context limit hit — compacting history and retrying` | The server rejected the prompt length. Compaction runs again once. |
 | `primary still unreachable: …` | `/primary` probed the original host and it is still a connection failure. |
-| `session not found: <name>` | `/sessions` lists names. `last` is the newest file for this directory. |
+| `session not found: <name>` | `/sessions` lists ids. `last` is the session with the newest activity in this directory. |
 | `usage: /url <base_url>` | `/url` needs a host. A bare hostname is accepted and `https://` and `/v1` are added. |
 | `no unique model match for '…'` | `/models`, then `/model` with a number or a longer substring. |
 | `stopped` | You typed `stop` while a turn was running. |

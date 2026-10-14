@@ -33,7 +33,18 @@ from .. import COMPANY, PRODUCT, __version__
 from ..agent import Agent, AgentUI, format_api_error, is_stop_message
 from ..commands import dispatch_slash, pasted_api_key
 from ..config import host_label
-from ..sessions import list_sessions, save_session
+from ..sessions import (
+    SESSION_PAGE,
+    SessionRowModel,
+    build_session_rows,
+    delete_session,
+    list_sessions,
+    page_session_rows,
+    rename_session,
+    save_session,
+    session_clock,
+    toggle_session_flag,
+)
 
 MAX_OBS_CHARS = 1_200
 NUDGE_PREFIXES = (
@@ -352,10 +363,86 @@ class Composer(Input):
 
 
 class SessionRow(ListItem):
-    def __init__(self, name: str, preview: str) -> None:
-        label = name if not preview else f"{name}\n{preview}"
-        super().__init__(Label(label, markup=False))
-        self.session_name = name
+    """One session line, or a day/pinned header that keyboard nav skips."""
+
+    def __init__(self, row: SessionRowModel) -> None:
+        classes = []
+        if row.kind == "header":
+            classes.append("session-header")
+        if row.active:
+            classes.append("session-active")
+        if row.continuation:
+            classes.append("session-continuation")
+        super().__init__(
+            disabled=row.kind == "header",
+            classes=" ".join(classes) or None,
+        )
+        self.view = row
+        self.session_name = row.name
+        if row.tooltip:
+            self.tooltip = row.tooltip
+
+    def compose(self) -> ComposeResult:
+        yield Label(self.view.primary, markup=False)
+        if self.view.secondary:
+            yield Label(self.view.secondary, markup=False, classes="session-meta")
+
+
+class SessionPrompt(Input):
+    """Filter or rename field. Escape returns to the session list."""
+
+    BINDINGS = [Binding("escape", "cancel", show=False, priority=True)]
+
+    def action_cancel(self) -> None:
+        self.remove_class("visible")
+        sessions = self.app.query_one("#sessions", ListView)
+        if sessions.children:
+            sessions.focus()
+        else:
+            self.app.query_one("#composer", Input).focus()
+
+
+class SessionList(ListView):
+    """Session sidebar. Keys apply only while this list is focused."""
+
+    BINDINGS = [
+        Binding("escape", "leave", "Back", show=False),
+        Binding("slash", "filter", "Search", show=False),
+        Binding("r", "rename", "Rename", show=False),
+        Binding("p", "pin", "Pin", show=False),
+        Binding("a", "archive", "Archive", show=False),
+        Binding("x", "delete", "Delete", show=False),
+        Binding("j", "cursor_down", show=False),
+        Binding("k", "cursor_up", show=False),
+    ]
+
+    def action_leave(self) -> None:
+        self.app.query_one("#composer", Input).focus()
+
+    def action_filter(self) -> None:
+        app = self.app
+        if isinstance(app, HfAgentApp):
+            app.action_filter_sessions()
+
+    def action_rename(self) -> None:
+        app = self.app
+        if isinstance(app, HfAgentApp):
+            app.action_rename_highlighted()
+
+    async def action_pin(self) -> None:
+        app = self.app
+        if isinstance(app, HfAgentApp):
+            await app.action_pin_highlighted()
+
+    async def action_archive(self) -> None:
+        app = self.app
+        if isinstance(app, HfAgentApp):
+            await app.action_archive_highlighted()
+
+    async def action_delete(self) -> None:
+        app = self.app
+        if isinstance(app, HfAgentApp):
+            await app.action_delete_highlighted()
 
 
 class ModelRow(ListItem):
@@ -447,7 +534,7 @@ class HfAgentApp(App):
     }
 
     #sidebar {
-        width: 28;
+        width: 36;
         background: $surface;
         border-right: solid $foreground 20%;
     }
@@ -465,6 +552,16 @@ class HfAgentApp(App):
         height: auto;
     }
 
+    #session-filter, #session-rename {
+        display: none;
+        margin: 0 1;
+        height: 3;
+    }
+
+    #session-filter.visible, #session-rename.visible {
+        display: block;
+    }
+
     #sessions {
         height: 1fr;
         background: $surface;
@@ -473,6 +570,25 @@ class HfAgentApp(App):
     #sessions ListItem {
         padding: 0 1;
         height: auto;
+    }
+
+    #sessions ListItem.session-header {
+        opacity: 1;
+        color: $text-muted;
+        text-style: bold;
+        padding: 1 1 0 1;
+    }
+
+    #sessions ListItem.session-active {
+        background: $accent 18%;
+    }
+
+    #sessions ListItem.session-continuation {
+        color: $foreground 65%;
+    }
+
+    #sessions .session-meta {
+        color: $foreground 60%;
     }
 
     #tools-list {
@@ -620,6 +736,7 @@ class HfAgentApp(App):
         Binding("ctrl+l", "clear_chat", "Clear"),
         Binding("f1", "show_help", "Help"),
         Binding("f2", "pick_model", "Model"),
+        Binding("f3", "focus_sessions", "Sessions"),
         Binding(
             "ctrl+c,super+c",
             "copy_or_quit_hint",
@@ -649,13 +766,22 @@ class HfAgentApp(App):
         self._device = "…"
         self._prompt_tokens = 0
         self._completion_tokens = 0
+        self._session_query = ""
+        self._session_rows: list[SessionRowModel] = []
+        self._session_offset = 0
+        self._session_paging = False
+        self._suppress_filter = False
+        self._rename_target = ""
+        self._session_refresh_gen = 0
 
     def compose(self) -> ComposeResult:
         yield Static(id="header-bar")
         with Horizontal(id="body"):
             with Vertical(id="sidebar"):
-                yield Label("SESSIONS", classes="side-title")
-                yield ListView(id="sessions")
+                yield Label("SESSIONS", classes="side-title", id="sessions-title")
+                yield SessionPrompt(placeholder="Filter sessions", id="session-filter")
+                yield SessionPrompt(placeholder="Rename session", id="session-rename")
+                yield SessionList(id="sessions")
                 yield Label("TOOLS", classes="side-title")
                 yield Static(id="tools-list", markup=False)
             with Vertical(id="main"):
@@ -733,14 +859,165 @@ class HfAgentApp(App):
             f"{cfg.model}  ·  {cfg.approval}  ·  {cwd}{busy}"
         )
 
+    def _highlighted_session(self) -> SessionRow | None:
+        child = self.query_one(SessionList).highlighted_child
+        if isinstance(child, SessionRow) and child.view.kind == "session" and child.session_name:
+            return child
+        return None
+
+    def _sync_session_query(self, query: str) -> None:
+        self._session_query = query.strip()
+        box = self.query_one("#session-filter", SessionPrompt)
+        if box.value != self._session_query:
+            # Changed is delivered after this returns; the handler consumes the flag.
+            self._suppress_filter = True
+            box.value = self._session_query
+        box.set_class(bool(self._session_query), "visible")
+
     async def refresh_sessions(self) -> None:
-        view = self.query_one("#sessions", ListView)
+        self._session_refresh_gen += 1
+        generation = self._session_refresh_gen
+        records = list_sessions(include_archived=True)
+        rows = build_session_rows(
+            records,
+            now=session_clock(),
+            active=self.agent.session_name,
+            query=self._session_query,
+        )
+        if generation != self._session_refresh_gen:
+            return
+        self._session_rows = rows
+        self._session_offset = 0
+        view = self.query_one(SessionList)
         await view.clear()
-        rows = [
-            SessionRow(s["name"], s["preview"]) for s in list_sessions()
-        ]
-        if rows:
-            await view.extend(rows)
+        if generation != self._session_refresh_gen:
+            return
+        await self._mount_session_page()
+        if generation != self._session_refresh_gen:
+            return
+        if not view.children:
+            empty = "No matches" if self._session_query else "No saved sessions"
+            await view.extend(
+                [
+                    SessionRow(
+                        SessionRowModel(kind="header", primary=empty, title=empty)
+                    )
+                ]
+            )
+        self._update_session_heading(records)
+        await self._reveal_active_session()
+
+    async def _mount_session_page(self) -> None:
+        view = self.query_one(SessionList)
+        chunk, self._session_offset = page_session_rows(
+            self._session_rows, self._session_offset, SESSION_PAGE
+        )
+        if chunk:
+            await view.extend(SessionRow(row) for row in chunk)
+
+    async def _reveal_active_session(self) -> None:
+        active = self.agent.session_name
+        if not active:
+            return
+        view = self.query_one(SessionList)
+        for _ in range(8):
+            if any(getattr(child, "session_name", "") == active for child in view.children):
+                break
+            if self._session_offset >= len(self._session_rows):
+                break
+            await self._mount_session_page()
+        for index, child in enumerate(view.children):
+            if (
+                isinstance(child, SessionRow)
+                and child.session_name == active
+                and not child.disabled
+            ):
+                view.index = index
+                break
+
+    def _update_session_heading(self, records: list[dict]) -> None:
+        total = sum(1 for record in records if not record.get("archived"))
+        shown = sum(1 for row in self._session_rows if row.kind == "session")
+        label = self.query_one("#sessions-title", Label)
+        if self._session_query:
+            label.update(f"SESSIONS  {shown}/{total}")
+        elif total:
+            label.update(f"SESSIONS  {total}")
+        else:
+            label.update("SESSIONS")
+
+    def action_focus_sessions(self) -> None:
+        if self._busy:
+            self.set_status("still working — wait, then pick a session")
+            return
+        self.query_one("#sidebar").remove_class("hidden")
+        view = self.query_one(SessionList)
+        view.focus()
+        if view.index is not None:
+            return
+        for index, child in enumerate(view.children):
+            if isinstance(child, SessionRow) and child.view.kind == "session":
+                view.index = index
+                break
+
+    def action_filter_sessions(self) -> None:
+        self.query_one("#sidebar").remove_class("hidden")
+        self.query_one("#session-rename", SessionPrompt).remove_class("visible")
+        box = self.query_one("#session-filter", SessionPrompt)
+        box.add_class("visible")
+        box.focus()
+
+    def action_rename_highlighted(self) -> None:
+        row = self._highlighted_session()
+        if row is None:
+            self.set_status("highlight a session, then press r")
+            return
+        self.query_one("#session-filter", SessionPrompt).remove_class("visible")
+        box = self.query_one("#session-rename", SessionPrompt)
+        box.add_class("visible")
+        self._rename_target = row.session_name
+        box.value = row.view.title
+        box.focus()
+        box.cursor_position = len(box.value)
+
+    async def action_pin_highlighted(self) -> None:
+        await self._toggle_highlighted("pinned")
+
+    async def action_archive_highlighted(self) -> None:
+        await self._toggle_highlighted("archived")
+
+    async def _toggle_highlighted(self, flag: str) -> None:
+        row = self._highlighted_session()
+        if row is None:
+            self.set_status("highlight a session first")
+            return
+        toggled = toggle_session_flag(row.session_name, flag)
+        if toggled is None:
+            self.set_status("session not found")
+            return
+        ident, value = toggled
+        if flag == "pinned":
+            verb = "pinned" if value else "unpinned"
+        else:
+            verb = "archived" if value else "restored"
+        self.set_status(f"{verb} {ident}")
+        await self.refresh_sessions()
+        self.query_one(SessionList).focus()
+
+    async def action_delete_highlighted(self) -> None:
+        row = self._highlighted_session()
+        if row is None:
+            self.set_status("highlight a session first")
+            return
+        removed = delete_session(row.session_name)
+        if removed is None:
+            self.set_status("session not found")
+        else:
+            if self.agent.session_name == row.session_name:
+                self.agent.session_name = None
+            self.set_status(f"deleted {removed}")
+        await self.refresh_sessions()
+        self.query_one(SessionList).focus()
 
     async def _mount_banner(self) -> None:
         chat = self.query_one("#chat")
@@ -1051,12 +1328,20 @@ class HfAgentApp(App):
 
     async def _handle_slash(self, text: str) -> None:
         result = dispatch_slash(self.agent, self.agent.ui, text)
-        command = text.split(maxsplit=1)[0].lower()
+        parts = text.split(maxsplit=1)
+        command = parts[0].lower()
+        arg = parts[1] if len(parts) > 1 else ""
         if command in ("/cloud", "/local", "/host"):
             self._device = "…"
             self.run_worker(self._probe_device, thread=True, exclusive=False)
+        if command == "/search":
+            self._sync_session_query(arg)
+        elif command == "/sessions":
+            self._sync_session_query("")
         self.refresh_header()
         await self.refresh_sessions()
+        if command == "/sessions":
+            self.action_focus_sessions()
         if result == "exit":
             self.exit()
         elif result == "clear":
@@ -1080,7 +1365,12 @@ class HfAgentApp(App):
     def _run_turn(self, prompt: str) -> None:
         try:
             self.agent.run(prompt)
-            save_session(self.agent.messages, self.agent.config.model)
+            path = save_session(
+                self.agent.messages,
+                self.agent.config.model,
+                name=self.agent.session_name,
+            )
+            self.agent.session_name = path.stem
         except Exception as exc:
             self.post_message(
                 ErrorMsg(
@@ -1098,15 +1388,75 @@ class HfAgentApp(App):
     @on(ListView.Selected, "#sessions")
     def on_session_selected(self, event: ListView.Selected) -> None:
         item = event.item
-        if self._busy or not isinstance(item, SessionRow):
+        if (
+            self._busy
+            or not isinstance(item, SessionRow)
+            or item.view.kind != "session"
+            or not item.session_name
+        ):
             return
         result = dispatch_slash(self.agent, self.agent.ui, f"/resume {item.session_name}")
         if result == "resume":
             self.run_worker(self._reload_resume)
 
+    @on(ListView.Highlighted, "#sessions")
+    async def on_session_highlighted(self, event: ListView.Highlighted) -> None:
+        if self._session_paging or event.item is None:
+            return
+        view = self.query_one(SessionList)
+        if view.index is None:
+            return
+        if len(view.children) - view.index > 8:
+            return
+        if self._session_offset >= len(self._session_rows):
+            return
+        self._session_paging = True
+        try:
+            await self._mount_session_page()
+        finally:
+            self._session_paging = False
+
+    @on(Input.Changed, "#session-filter")
+    async def on_session_filter_changed(self, event: Input.Changed) -> None:
+        if self._suppress_filter:
+            self._suppress_filter = False
+            return
+        query = event.value.strip()
+        if query == self._session_query:
+            return
+        self._session_query = query
+        box = self.query_one("#session-filter", SessionPrompt)
+        # Hiding the focused filter drops focus onto the composer.
+        if query:
+            box.add_class("visible")
+        elif not box.has_focus:
+            box.remove_class("visible")
+        await self.refresh_sessions()
+
+    @on(Input.Submitted, "#session-filter")
+    def on_session_filter_submit(self, event: Input.Submitted) -> None:
+        self.query_one(SessionList).focus()
+
+    @on(Input.Submitted, "#session-rename")
+    async def on_session_rename_submit(self, event: Input.Submitted) -> None:
+        title = event.value.strip()
+        target = self._rename_target
+        box = self.query_one("#session-rename", SessionPrompt)
+        box.remove_class("visible")
+        if title and target:
+            renamed = rename_session(target, title)
+            if renamed is None:
+                self.set_status("could not rename session")
+            else:
+                self.set_status(f"renamed session: {renamed}")
+            await self.refresh_sessions()
+        self._rename_target = ""
+        self.query_one(SessionList).focus()
+
     async def _reload_resume(self) -> None:
         await self.clear_transcript()
         await self.replay_history()
+        await self.refresh_sessions()
 
     @work
     async def request_approval(self, event: ApprovalMsg) -> None:
