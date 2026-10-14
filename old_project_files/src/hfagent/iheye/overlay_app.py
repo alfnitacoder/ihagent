@@ -151,7 +151,8 @@ def run_overlay(args, host: HostInfo) -> int:
             self._state = str(state)
             self.setNeedsDisplay_(True)
 
-        def setMotion_(self, phase, pupil, blink_extra):
+        @objc.python_method
+        def set_motion(self, phase, pupil, blink_extra):
             self._phase = float(phase)
             self._pupil = None if pupil is None else (float(pupil[0]), float(pupil[1]))
             self._blink_extra = float(blink_extra or 0.0)
@@ -374,6 +375,7 @@ def run_overlay(args, host: HostInfo) -> int:
                     return
                 self._handle(msg)
 
+        @objc.python_method
         def _handle(self, msg):
             if not isinstance(msg, dict):
                 return
@@ -496,7 +498,7 @@ def run_overlay(args, host: HostInfo) -> int:
                 base = pupil_offset(self._state, phase)
                 pupil = tracked_pupil(base, gaze, offset)
             if self.view is not None and self._eye_visible:
-                self.view.setMotion_(phase, pupil, blink)
+                self.view.set_motion(phase, pupil, blink)
             interval = tick_interval(
                 visible=self._eye_visible,
                 state=self._state,
@@ -508,6 +510,7 @@ def run_overlay(args, host: HostInfo) -> int:
             )
             self._arm(interval)
 
+        @objc.python_method
         def _arm(self, interval):
             if self._timer is not None and abs(interval - self._interval) < 0.004:
                 return
@@ -518,6 +521,7 @@ def run_overlay(args, host: HostInfo) -> int:
                 interval, self, "animTick:", None, True
             )
 
+        @objc.python_method
         def _remember_front(self):
             if self.drop is not None and self.drop.isKeyWindow():
                 return
@@ -528,6 +532,7 @@ def run_overlay(args, host: HostInfo) -> int:
                 return
             self._previous_app = app
 
+        @objc.python_method
         def _restore_front(self):
             if self.drop is not None:
                 self.drop.makeFirstResponder_(None)
@@ -538,11 +543,13 @@ def run_overlay(args, host: HostInfo) -> int:
             if should_restore_front(front_pid, os.getpid(), prev_pid) and prev is not None:
                 prev.activateWithOptions_(NSApplicationActivateIgnoringOtherApps)
 
+        @objc.python_method
         def _approval_token(self):
             if not isinstance(self.approval, dict):
                 return None
             return (str(self.approval.get("tool") or ""), str(self.approval.get("preview") or ""))
 
+        @objc.python_method
         def _sync_drop(self):
             if self.drop is None:
                 return
@@ -574,6 +581,7 @@ def run_overlay(args, host: HostInfo) -> int:
                 self._shown = text_token
                 self._fill_drop(mode)
 
+        @objc.python_method
         def _place_drop(self):
             if self.panel is None or self.drop is None or self._mode == "closed":
                 return
@@ -601,6 +609,7 @@ def run_overlay(args, host: HostInfo) -> int:
             _place_view(self.yes, frames.get("yes"))
             _place_view(self.no, frames.get("no"))
 
+        @objc.python_method
         def _fill_drop(self, mode):
             if self.drop_view is not None:
                 self.drop_view.mode = mode
@@ -642,6 +651,7 @@ def run_overlay(args, host: HostInfo) -> int:
                 return
             self._apply_focus(front, None)
 
+        @objc.python_method
         def _apply_focus(self, front, front_tty):
             self.querying = False
             if self.panel is None:
@@ -695,6 +705,7 @@ def run_overlay(args, host: HostInfo) -> int:
         def approveNo_(self, _sender):
             self._answer_approval(False)
 
+        @objc.python_method
         def _answer_approval(self, yes):
             if self.server is not None:
                 self.server.send({"cmd": "approve", "yes": bool(yes)})
