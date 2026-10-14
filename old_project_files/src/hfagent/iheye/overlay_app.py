@@ -235,12 +235,12 @@ def run_overlay(args, host: HostInfo) -> int:
                 self._skin = "classic"
                 self.setNeedsDisplay_(True)
                 return
-            try:
-                self._install_layers()
-            except Exception:
-                self._layer_mode = False
-                self._layers = None
-            self._robot_refresh(True)
+            # CALayer hosting aborts the helper on some macOS/PyObjC builds.
+            # Paint the robot skin in drawRect_ instead; motion still works.
+            self._layer_mode = False
+            self._layers = None
+            self.setNeedsDisplay_(True)
+
 
         @objc.python_method
         def _load_art(self):
@@ -1419,6 +1419,7 @@ def run_overlay(args, host: HostInfo) -> int:
         button.setTarget_(controller)
         button.setAction_(action)
         return button
+
 
     try:
         application = NSApplication.sharedApplication()
