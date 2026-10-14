@@ -1318,7 +1318,7 @@ class Agent:
             return f"Error: unknown tool '{name}'. Available tools: {available}"
 
         self.ui.on_action(name, args)
-        if tool.needs_approval and not self._approved(tool, args):
+        if self._needs_approval(tool, args) and not self._approved(tool, args):
             result = "User declined this action. Propose an alternative or ask why."
             self.ui.on_observation(name, result)
             return result
@@ -1354,6 +1354,17 @@ class Agent:
             self._repeat_fail = {"sig": sig, "n": 1, "out": result}
         self.ui.on_observation(name, result)
         return result
+
+    def _needs_approval(self, tool, args: dict) -> bool:
+        checker = getattr(tool, "requires_approval", None)
+        if not callable(checker):
+            return bool(tool.needs_approval)
+        try:
+            return bool(checker(**args))
+        except TypeError:
+            return bool(tool.needs_approval)
+        except Exception:
+            return bool(tool.needs_approval)
 
     def _approved(self, tool, args: dict) -> bool:
         if self.config.approval == "auto":

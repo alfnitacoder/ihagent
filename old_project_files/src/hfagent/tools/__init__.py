@@ -1,6 +1,23 @@
 """Tool package: base classes and the default registry."""
 
 from .base import Tool, ToolRegistry
+from .browser import (
+    BrowserClick,
+    BrowserCloseTab,
+    BrowserDownload,
+    BrowserNewTab,
+    BrowserOpen,
+    BrowserPress,
+    BrowserRead,
+    BrowserScreenshot,
+    BrowserScroll,
+    BrowserSelect,
+    BrowserSwitchTab,
+    BrowserTabs,
+    BrowserType,
+    BrowserWait,
+    WebSearch,
+)
 from .files import EditFile, Grep, ListDir, ReadFile, WriteFile
 from .memory_tool import Remember
 from .shell import RunCommand
@@ -13,11 +30,25 @@ __all__ = [
     "ReadFile",
     "WriteFile",
     "EditFile",
-    "WriteFile",
     "Grep",
     "RunCommand",
     "SshRun",
     "Remember",
+    "WebSearch",
+    "BrowserOpen",
+    "BrowserTabs",
+    "BrowserSwitchTab",
+    "BrowserNewTab",
+    "BrowserCloseTab",
+    "BrowserRead",
+    "BrowserClick",
+    "BrowserType",
+    "BrowserSelect",
+    "BrowserPress",
+    "BrowserScroll",
+    "BrowserScreenshot",
+    "BrowserWait",
+    "BrowserDownload",
 ]
 
 
@@ -26,6 +57,10 @@ def default_registry() -> ToolRegistry:
     for tool in (
         ListDir(), ReadFile(), Grep(), WriteFile(), EditFile(), RunCommand(),
         SshRun(), Remember(),
+        WebSearch(), BrowserOpen(), BrowserTabs(), BrowserSwitchTab(),
+        BrowserNewTab(), BrowserCloseTab(), BrowserRead(), BrowserClick(),
+        BrowserType(), BrowserSelect(), BrowserPress(), BrowserScroll(),
+        BrowserScreenshot(), BrowserWait(), BrowserDownload(),
     ):
         registry.register(tool)
     return registry

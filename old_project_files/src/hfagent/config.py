@@ -44,6 +44,13 @@ _ALIASES = {
     "hfagent_fallback_api_key": "HFAGENT_FALLBACK_API_KEY",
     "hfagent_local_model": "HFAGENT_LOCAL_MODEL",
     "hfagent_cloud_model": "HFAGENT_CLOUD_MODEL",
+    "hfagent_browser_headless": "HFAGENT_BROWSER_HEADLESS",
+    "hfagent_browser_profile": "HFAGENT_BROWSER_PROFILE",
+    "hfagent_browser_download_dir": "HFAGENT_BROWSER_DOWNLOAD_DIR",
+    "hfagent_browser_channel": "HFAGENT_BROWSER_CHANNEL",
+    "hfagent_browser_executable": "HFAGENT_BROWSER_EXECUTABLE",
+    "hfagent_browser_timeout_ms": "HFAGENT_BROWSER_TIMEOUT_MS",
+    "hfagent_browser_max_chars": "HFAGENT_BROWSER_MAX_CHARS",
 }
 
 # key -> (value in the process before we wrote it, value we wrote)
@@ -678,4 +685,28 @@ def format_config_report(config: "Config") -> str:
         shown = mask_secret(value) if secret else (value or "(unset)")
         source = config.sources.get(name, "default")
         lines.append(f"{name}={shown}  [{source}]")
+    lines.extend(_browser_report_lines())
     return "\n".join(lines)
+
+
+def _browser_report_lines() -> list[str]:
+    from .browser import BrowserSettings, playwright_available
+
+    settings = BrowserSettings.from_env()
+
+    def src(name: str) -> str:
+        return source_of(name) if os.environ.get(name) else "default"
+
+    installed = "yes" if playwright_available() else "no"
+    return [
+        "",
+        "Browser (dedicated Chrome profile, starts on first browser tool):",
+        f"browser_headless={str(settings.headless).lower()}  [{src('HFAGENT_BROWSER_HEADLESS')}]",
+        f"browser_profile={settings.profile}  [{src('HFAGENT_BROWSER_PROFILE')}]",
+        f"browser_download_dir={settings.download_dir}  [{src('HFAGENT_BROWSER_DOWNLOAD_DIR')}]",
+        f"browser_channel={settings.channel or '(auto)'}  [{src('HFAGENT_BROWSER_CHANNEL')}]",
+        f"browser_executable={settings.executable or '(auto)'}  [{src('HFAGENT_BROWSER_EXECUTABLE')}]",
+        f"browser_timeout_ms={settings.timeout_ms}  [{src('HFAGENT_BROWSER_TIMEOUT_MS')}]",
+        f"browser_max_chars={settings.max_chars}  [{src('HFAGENT_BROWSER_MAX_CHARS')}]",
+        f"playwright_installed={installed}",
+    ]
