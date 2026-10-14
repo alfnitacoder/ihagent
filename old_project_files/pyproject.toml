@@ -29,6 +29,9 @@ packages = ["src/hfagent"]
 
 [tool.hatch.build.targets.wheel.force-include]
 "src/hfagent/builtin_skills" = "hfagent/builtin_skills"
+"src/hfagent/iheye/assets/frame.png" = "hfagent/iheye/assets/frame.png"
+"src/hfagent/iheye/assets/iris.png" = "hfagent/iheye/assets/iris.png"
+"src/hfagent/iheye/assets/layout.json" = "hfagent/iheye/assets/layout.json"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

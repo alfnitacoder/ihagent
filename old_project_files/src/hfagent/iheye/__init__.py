@@ -20,6 +20,7 @@ from .supervisor import (
     EyeSupervisor,
     enabled_from_env,
     pyobjc_available,
+    skin_name,
     summary_enabled,
     track_enabled,
 )
@@ -40,6 +41,7 @@ __all__ = [
     "publish_summary",
     "start_if_enabled",
     "stop",
+    "skin_name",
     "summary_enabled",
     "track_enabled",
     "unbind_handlers",
@@ -246,6 +248,11 @@ def config_report_lines() -> list[str]:
     )
     lines.append(f"iheye_track={'on' if track_enabled() else 'off'}  [{track_source}]")
     lines.append(f"iheye_summary={'on' if summary_enabled() else 'off'}  [{summary_source}]")
+    skin_raw = os.environ.get("HFAGENT_IHEYE_SKIN")
+    skin_source = (
+        "default" if skin_raw is None or str(skin_raw).strip() == "" else source_of("HFAGENT_IHEYE_SKIN")
+    )
+    lines.append(f"iheye_skin={skin_name()}  [{skin_source}]")
     if sys.platform != "darwin":
         lines.append("iheye_platform=not-macos")
     elif pyobjc_available():

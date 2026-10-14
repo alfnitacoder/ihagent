@@ -19,6 +19,7 @@ from pathlib import Path
 
 from .appearance import STATES
 from .host import HostInfo
+from .robot import normalize_skin, skin_from_env
 from .panels import clean_chat_text, summarize_answer, trim_reply
 from .protocol import connect_socket, decode, encode
 
@@ -50,6 +51,11 @@ def track_enabled(environ: dict[str, str] | None = None) -> bool:
 def summary_enabled(environ: dict[str, str] | None = None) -> bool:
     """``HFAGENT_IHEYE_SUMMARY`` — completion card under the eye."""
     return flag_enabled("HFAGENT_IHEYE_SUMMARY", True, environ)
+
+
+def skin_name(environ: dict[str, str] | None = None) -> str:
+    """``HFAGENT_IHEYE_SKIN`` — ``robot`` or ``classic``. Default is robot."""
+    return skin_from_env(environ)
 
 
 def enabled_from_env(environ: dict[str, str] | None = None, platform_name: str | None = None) -> bool:
@@ -87,6 +93,7 @@ def helper_command(
     executable: str | None = None,
     track: bool = True,
     summary: bool = True,
+    skin: str = "robot",
 ) -> list[str]:
     return [
         executable or sys.executable,
@@ -114,6 +121,8 @@ def helper_command(
         "1" if track else "0",
         "--summary",
         "1" if summary else "0",
+        "--skin",
+        normalize_skin(skin),
     ]
 
 
@@ -133,6 +142,7 @@ class EyeSupervisor:
         self.state = "idle"
         self.track = track_enabled()
         self.summary_enabled = summary_enabled()
+        self.skin = skin_from_env()
         self.host: HostInfo | None = None
         self.on_chat = None
         self.on_approval = None
@@ -187,6 +197,7 @@ class EyeSupervisor:
             host=host,
             track=self.track,
             summary=self.summary_enabled,
+            skin=self.skin,
         )
         self.log_path.parent.mkdir(parents=True, exist_ok=True)
         log_fh = open(self.log_path, "w", encoding="utf-8")

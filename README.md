@@ -13,7 +13,7 @@ Package `hfagent` 0.4.0, Python 3.10+, license MIT (declared in `old_project_fil
 - **Host control in the session.** `/url` tests and switches hosts, `/config` and `ihagent --show-config` print the effective settings and the source that won, a configured fallback host takes over on connection failures, and `/primary` switches back.
 - **Reasoning display.** Text from `reasoning` / `reasoning_content`, or from `<think>` tags, is shown dimmed as thought in the TUI and the console. A reply that also has a final answer or a tool call is kept. Reasoning alone is nudged for a final answer.
 - **Chrome browser tools.** A dedicated profile (`~/.hfagent/chrome-profile`), lazy launch, and y/N approval for form submits, purchases, and executable downloads. Page text is labelled untrusted.
-- **iheye (macOS).** An always-on-top eye while the ihagent terminal is in the background. Hover opens a chat panel whose line is handled like the TUI composer. A finished turn can show a short summary card, and a pending y/N approval shows on that card. The pupil follows the pointer; key activity makes it glance without reading which key was pressed. `/iheye` turns the bubble, tracking, and summary card on or off.
+- **iheye (macOS).** An always-on-top robotic eye while the ihagent terminal is in the background. The iris follows the pointer, dashed rings spin, and the core breathes. Hover opens a chat panel whose line is handled like the TUI composer. A finished turn can show a short summary card, and a pending y/N approval shows on that card. Key activity makes it glance without reading which key was pressed. `/iheye` turns the bubble, tracking, and summary card on or off. `HFAGENT_IHEYE_SKIN=classic` keeps the original bubble.
 
 ## Quick start
 
@@ -186,13 +186,15 @@ Terminal.app and iTerm2 hide the bubble only when the ihagent window or tab is t
 
 The eye follows the agent: idle is calm, thinking moves the pupil, a y/N approval pulses amber (`waiting`), and a finished turn pulses green (`done`).
 
+The default skin is the brushed-metal robotic eye (`HFAGENT_IHEYE_SKIN=robot`, or anything other than `classic`). The helper ships a frame image and a separate iris glow, scaled for a window about 150 points wide at retina 2x. Pixels outside the frame are transparent, and clicks there fall through. The iris sits in a dark socket and slides toward the pointer, clipped so it stays inside the metal. Dashed rings spin slowly and speed up while thinking. The white core breathes. A blink brings metal lids down over the socket. Idle stays blue, thinking is brighter and spins faster, approval pulses amber, and a finished turn flashes green. Ring sprites are cached per state. The spin and the breath are layer animations, so an idle robot eye only polls at about 15fps. `HFAGENT_IHEYE_SKIN=classic` is the original rounded bubble labeled **iheye**. The helper reads the skin when it starts.
+
 Hover the eye and a panel opens under it (`Message ihagent`). Enter sends the line. The TUI and the line REPL treat it like a line you typed: the transcript shows it, a new turn starts when the agent is idle, and a line sent mid-task is picked up on the next step (`stop` still cancels). The reply streams back into the panel, trimmed to the newest lines (about six lines, 360 characters). The panel stays open while the pointer is over the eye or the panel, or while the text field is focused. Esc closes it and keeps it closed until the pointer leaves and comes back. Moving the pointer away closes it after about 0.35 seconds. After you send, focus returns to the app you were using when the helper had become frontmost.
 
 When a turn finishes and the bubble is visible, a card under the eye shows the first lines of the answer (about four lines, 220 characters, no extra model call). It hides after 8 seconds. Hovering the card pauses that timer. Clicking the card opens the ihagent terminal. If a tool is waiting on y/N, the card shows the tool name, a short preview, and **y** / **N** buttons that answer the same prompt as the TUI. Turning summaries off hides that completion card. The approval card still shows.
 
-The pupil follows the pointer anywhere on the screen (`NSEvent.mouseLocation`). That needs no extra permission. A key-down in another app makes the eye glance and blink for a short moment. The handler records only that a key went down. It does not read which key, and it does not write keystrokes to `~/.hfagent/iheye.log`. Idle animation ticks slowly; thinking, approval, and nearby pointer motion redraw faster.
+The pupil follows the pointer anywhere on the screen (`NSEvent.mouseLocation`). That needs no extra permission. A key-down in another app makes the eye glance and blink for a short moment. The handler records only that a key went down. It does not read which key, and it does not write keystrokes to `~/.hfagent/iheye.log`. Idle animation ticks slowly (about 15fps for the robot skin, 8fps for classic); thinking, approval, and nearby pointer motion redraw faster. Hover chat, the summary card, and the y/N card are the same for both skins.
 
-The overlay is on by default on macOS and off elsewhere. It starts with the TUI, the line REPL, and `-p`. `--show-config` and `--version` do not start it. `ihagent --show-config` and `/config` include `iheye`, `iheye_track`, `iheye_summary`, and whether PyObjC is installed. `~/.hfagent/iheye.log` is replaced on each launch.
+The overlay is on by default on macOS and off elsewhere. It starts with the TUI, the line REPL, and `-p`. `--show-config` and `--version` do not start it. `ihagent --show-config` and `/config` include `iheye`, `iheye_track`, `iheye_summary`, `iheye_skin`, and whether PyObjC is installed. `~/.hfagent/iheye.log` is replaced on each launch.
 
 ```bash
 pip install -e 'old_project_files[browser,iheye]'
@@ -265,6 +267,7 @@ The first source that sets a value wins. `ihagent --show-config` and `/config` p
 | `HFAGENT_IHEYE` | on for macOS, off elsewhere | `0` / `off` disables the bubble. `/iheye on` and `/iheye off` persist it in `~/.hfagent/.env`. |
 | `HFAGENT_IHEYE_TRACK` | on | `0` / `off` stops the pupil following the pointer and keyboard glances. `/iheye track on` and `/iheye track off` persist it. |
 | `HFAGENT_IHEYE_SUMMARY` | on | `0` / `off` hides the completion card. `/iheye summary on` and `/iheye summary off` persist it. The y/N card still shows. |
+| `HFAGENT_IHEYE_SKIN` | `robot` | `robot` is the brushed-metal eye. `classic` is the original bubble. Read when the helper starts. |
 
 There is no environment variable for temperature. Pass `--temperature`.
 
@@ -464,7 +467,7 @@ Runtime dependencies are `openai`, `rich`, and `textual`. Browser tools addition
         ├── context.py                 # token estimate and summary
         ├── reasoning.py               # <think> and reasoning fields
         ├── browser.py                 # dedicated Chrome
-        ├── iheye/                     # macOS floating eye (helper process)
+        ├── iheye/                     # macOS floating eye (helper process, robot skin assets)
         ├── tools/                     # files, shell, ssh, memory, browser
         ├── ui/                        # Textual TUI and Rich console
         └── builtin_skills/            # SKILL.md recipes loaded by directory name
