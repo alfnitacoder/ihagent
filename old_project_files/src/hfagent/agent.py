@@ -531,6 +531,20 @@ class AgentUI:
 
 
 class Agent:
+    @property
+    def ui(self) -> AgentUI:
+        return self._ui
+
+    @ui.setter
+    def ui(self, value: AgentUI) -> None:
+        self._ui = value
+        try:
+            from .robot_bridge import attach_ui
+
+            attach_ui(value)
+        except Exception:
+            pass
+
     def __init__(self, config: Config, registry: ToolRegistry, ui: AgentUI):
         self.config = config
         self.registry = registry

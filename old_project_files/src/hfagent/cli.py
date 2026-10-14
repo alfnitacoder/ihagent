@@ -271,6 +271,24 @@ def handle_resume(agent: Agent, ui: AgentUI, name: str) -> None:
     )
 
 
+def _start_robot_bridge() -> None:
+    try:
+        from .robot_bridge import start_if_enabled
+
+        start_if_enabled()
+    except Exception:
+        return
+
+
+def _stop_robot_bridge() -> None:
+    try:
+        from .robot_bridge import stop
+
+        stop()
+    except Exception:
+        return
+
+
 def _start_iheye() -> None:
     try:
         from .iheye import start_if_enabled
@@ -320,6 +338,7 @@ def main(argv: list[str] | None = None) -> None:
         print(format_config_report(config))
         return
     try:
+        _start_robot_bridge()
         if use_tui(args):
             agent, _ = make_agent(args, ui=AgentUI(), require_key=False)
             if args.resume:
@@ -352,5 +371,6 @@ def main(argv: list[str] | None = None) -> None:
             agent.ui = ui
         repl(agent, ui)
     finally:
+        _stop_robot_bridge()
         _stop_iheye()
         _shutdown_browser()
