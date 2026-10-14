@@ -45,7 +45,16 @@ from .panels import (
     step_hover,
     step_summary_timer,
 )
-from .position import clamp_position, default_position, drop_origin, load_position, save_position
+from .position import (
+    Display,
+    ScreenFrame,
+    display_containing_point,
+    display_for_rect,
+    drop_origin,
+    load_placement,
+    restore_bubble,
+    save_position,
+)
 from .protocol import EyeServer
 from .robot import (
     ASSETS,
@@ -126,7 +135,6 @@ def run_overlay(args, host: HostInfo) -> int:
             NSPanel,
             NSParagraphStyleAttributeName,
             NSRunningApplication,
-            NSScreen,
             NSTextField,
             NSView,
             NSWindowCollectionBehaviorCanJoinAllSpaces,
@@ -1038,18 +1046,22 @@ def run_overlay(args, host: HostInfo) -> int:
                 return
             width, height = drop_size(self._mode)
             eye = self.panel.frame()
-            sx, sy, sw, sh = _screen_rect()
+            # The card follows the bubble's window, on that window's display.
+            # mainScreen is the display with the key window, which is often a
+            # different monitor from the one the bubble was dragged to.
+            display = bubble_display(self.panel)
+            vis = display.visible
             x, y = drop_origin(
                 float(eye.origin.x),
                 float(eye.origin.y),
-                self.panel_w,
-                self.panel_h,
+                float(eye.size.width),
+                float(eye.size.height),
                 width,
                 height,
-                sx,
-                sy,
-                sw,
-                sh,
+                vis.x,
+                vis.y,
+                vis.w,
+                vis.h,
             )
             self.drop.setFrame_display_(NSMakeRect(x, y, width, height), True)
             if self.drop_view is not None:
@@ -1329,18 +1341,6 @@ def run_overlay(args, host: HostInfo) -> int:
         if app is not None:
             app.activateWithOptions_(NSApplicationActivateIgnoringOtherApps)
 
-    def _screen_rect():
-        screen = NSScreen.mainScreen()
-        frame = screen.visibleFrame() if screen is not None else None
-        if frame is None:
-            return 0.0, 0.0, 1440.0, 900.0
-        return (
-            float(frame.origin.x),
-            float(frame.origin.y),
-            float(frame.size.width),
-            float(frame.size.height),
-        )
-
     def _place_view(view, rect):
         if view is None:
             return
@@ -1382,7 +1382,8 @@ def run_overlay(args, host: HostInfo) -> int:
 
         skin = _overlay_skin(args)
         eye_w, eye_h = panel_size(skin)
-        x, y = _place_panel(str(args.position), eye_w, eye_h)
+        placed = _place_panel(str(args.position), eye_w, eye_h)
+        x, y = placed.x, placed.y
         style = NSWindowStyleMaskBorderless | NSWindowStyleMaskNonactivatingPanel
         behavior = (
             NSWindowCollectionBehaviorCanJoinAllSpaces
@@ -1414,14 +1415,31 @@ def run_overlay(args, host: HostInfo) -> int:
         view.set_reduce_motion(overlay_reduce_motion())
         view.onClick = lambda: controller.focusHost_(None)
         view.onDrag = lambda _px, _py: controller.followDrag()
-        view.onDragEnd = lambda px, py: save_position(args.position, px, py)
+
+        def _persist_bubble(px, py):
+            display = bubble_display(panel)
+            save_position(args.position, px, py, None if display is None else display.frame)
+
+        view.onDragEnd = _persist_bubble
         panel.setContentView_(view)
         controller.panel = panel
         controller.view = view
 
         drop_w, drop_h = drop_size("chat")
+        drop_x, drop_y = drop_origin(
+            x,
+            y,
+            eye_w,
+            eye_h,
+            drop_w,
+            drop_h,
+            placed.visible.x,
+            placed.visible.y,
+            placed.visible.w,
+            placed.visible.h,
+        )
         drop = KeyPanel.alloc().initWithContentRect_styleMask_backing_defer_(
-            NSMakeRect(x, y - drop_h - 6, drop_w, drop_h),
+            NSMakeRect(drop_x, drop_y, drop_w, drop_h),
             style,
             NSBackingStoreBuffered,
             False,
@@ -1530,20 +1548,123 @@ def _overlay_skin(args) -> str:
     return skin
 
 
-def _place_panel(position_path: str, eye_w: float, eye_h: float) -> tuple[float, float]:
-    from AppKit import NSScreen
+def _read_screen(screen) -> Display | None:
+    if screen is None:
+        return None
+    try:
+        frame = screen.frame()
+        visible = screen.visibleFrame()
+        full = ScreenFrame(
+            float(frame.origin.x),
+            float(frame.origin.y),
+            float(frame.size.width),
+            float(frame.size.height),
+        )
+        usable = ScreenFrame(
+            float(visible.origin.x),
+            float(visible.origin.y),
+            float(visible.size.width),
+            float(visible.size.height),
+        )
+    except Exception:
+        return None
+    if full.w <= 0 or full.h <= 0:
+        return None
+    return Display(full, usable)
 
-    screen = NSScreen.mainScreen()
-    frame = screen.visibleFrame() if screen is not None else None
-    if frame is None:
-        return 40.0, 40.0
-    origin_x = float(frame.origin.x)
-    origin_y = float(frame.origin.y)
-    width = float(frame.size.width)
-    height = float(frame.size.height)
-    saved = load_position(position_path)
-    if saved is None:
-        return default_position(origin_x, origin_y, width, height, eye_w, eye_h)
-    return clamp_position(
-        saved[0], saved[1], origin_x, origin_y, width, height, eye_w, eye_h
+
+def _connected_displays() -> list[Display]:
+    try:
+        from AppKit import NSScreen
+    except ImportError:
+        return []
+    try:
+        screens = NSScreen.screens()
+    except Exception:
+        return []
+    found: list[Display] = []
+    for screen in screens or []:
+        display = _read_screen(screen)
+        if display is not None:
+            found.append(display)
+    return found
+
+
+def bubble_display(window) -> Display:
+    """Display that contains the bubble window.
+
+    ``window.screen()`` is the display AppKit assigned to that window.
+    ``NSScreen.mainScreen`` is only a fallback for the first launch and for
+    a saved display that has been unplugged — never for the hover card.
+    """
+    displays = _connected_displays()
+    screen = None
+    rect = None
+    if window is not None:
+        try:
+            screen = window.screen()
+        except Exception:
+            screen = None
+        try:
+            frame = window.frame()
+            rect = (
+                float(frame.origin.x),
+                float(frame.origin.y),
+                float(frame.size.width),
+                float(frame.size.height),
+            )
+        except Exception:
+            rect = None
+    found = _read_screen(screen)
+    if found is not None:
+        return found
+    if rect is not None:
+        hit = display_for_rect(displays, *rect)
+        if hit is not None:
+            return hit
+    mouse = _mouse_point()
+    if mouse is not None:
+        hit = display_containing_point(displays, mouse[0], mouse[1])
+        if hit is not None:
+            return hit
+    main = _main_display()
+    if main is not None:
+        return main
+    if displays:
+        return displays[0]
+    return Display(ScreenFrame(0.0, 0.0, 1440.0, 900.0), ScreenFrame(0.0, 0.0, 1440.0, 900.0))
+
+
+def _mouse_point() -> tuple[float, float] | None:
+    try:
+        from AppKit import NSEvent
+    except ImportError:
+        return None
+    try:
+        loc = NSEvent.mouseLocation()
+        return float(loc.x), float(loc.y)
+    except Exception:
+        return None
+
+
+def _main_display() -> Display | None:
+    try:
+        from AppKit import NSScreen
+    except ImportError:
+        return None
+    try:
+        return _read_screen(NSScreen.mainScreen())
+    except Exception:
+        return None
+
+
+def _place_panel(position_path: str, eye_w: float, eye_h: float):
+    """First launch uses the main display. A saved bubble returns to its own display."""
+    return restore_bubble(
+        load_placement(position_path),
+        _connected_displays(),
+        _mouse_point(),
+        _main_display(),
+        eye_w,
+        eye_h,
     )
