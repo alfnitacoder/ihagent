@@ -7,7 +7,7 @@ import sys
 
 from .agent import Agent, AgentUI
 from .commands import dispatch_slash
-from .config import DEFAULT_MODEL, Config
+from .config import DEFAULT_MODEL, Config, format_config_report
 from .sessions import load_session, save_session
 from .tools import default_registry
 from .ui.console import ConsoleUI
@@ -71,6 +71,11 @@ def build_parser() -> argparse.ArgumentParser:
         help="force the TUI even if stdin/stdout is not a TTY",
     )
     parser.add_argument("--version", action="store_true", help="print version and exit")
+    parser.add_argument(
+        "--show-config",
+        action="store_true",
+        help="print effective settings and where each one came from, then exit",
+    )
     return parser
 
 
@@ -160,7 +165,14 @@ def repl(agent: Agent, ui: ConsoleUI) -> None:
         except Exception as exc:
             from .agent import format_api_error
 
-            ui.on_error(format_api_error(exc))
+            ui.on_error(
+                format_api_error(
+                    exc,
+                    base_url=agent.config.base_url,
+                    model=agent.config.model,
+                    key_var=agent.config.api_key_var,
+                )
+            )
 
 
 def handle_resume(agent: Agent, ui: AgentUI, name: str) -> None:
@@ -178,6 +190,18 @@ def main(argv: list[str] | None = None) -> None:
         from . import __version__
 
         print(__version__)
+        return
+    if args.show_config:
+        config = Config.load(
+            model=args.model,
+            base_url=args.base_url,
+            max_steps=args.max_steps,
+            approval="auto" if args.yolo else args.approval,
+            temperature=args.temperature,
+            local=args.local,
+            ollama=args.ollama,
+        )
+        print(format_config_report(config))
         return
     if use_tui(args):
         agent, _ = make_agent(args, ui=AgentUI(), require_key=False)

@@ -18,9 +18,18 @@ from typing import Any
 
 from openai import OpenAI
 
-from .config import Config
+from .config import Config, api_key_info, normalize_base_url
+from .context import compact_messages, completion_budget
+from .errors import (
+    classify_api_failure,
+    explain_failure,
+    is_connection_failure,
+    is_context_length_error,
+    kind_label,
+)
 from .memory import load_memory
 from .prompts import SYSTEM_PROMPT
+from .reasoning import ThinkSplitter, reasoning_text
 from .runtime import infer_device
 from .skills import format_skills_for_prompt
 from .tools import ToolRegistry
@@ -114,8 +123,18 @@ ERROR_FIELD_RE = re.compile(
 )
 
 
-def format_api_error(exc: BaseException) -> str:
-    """Turn an OpenAI/vLLM exception into a short line the TUI can wrap."""
+def format_api_error(
+    exc: BaseException,
+    *,
+    base_url: str = "",
+    model: str = "",
+    key_var: str = "",
+) -> str:
+    """Turn an OpenAI/vLLM exception into a short line the TUI can wrap.
+
+    Connection, auth, model-not-found, timeout, and server failures name the
+    URL and the cause class. Other errors keep the previous short unwrapping.
+    """
     raw = str(exc).strip() or type(exc).__name__
     # Prefer the longest useful error/message field (avoid bare keys like "model").
     candidates = [m.group(1).strip() for m in ERROR_FIELD_RE.finditer(raw)]
@@ -125,6 +144,15 @@ def format_api_error(exc: BaseException) -> str:
         return (
             "This model server rejected native tool calls. "
             "Retrying in text-tool mode."
+        )
+    kind = classify_api_failure(exc)
+    if kind:
+        return explain_failure(
+            kind,
+            exc,
+            base_url=base_url,
+            model=model,
+            key_var=key_var,
         )
     if inner.startswith("Error code:") and " - " in inner:
         inner = inner.split(" - ", 1)[1].strip()
@@ -139,6 +167,57 @@ def is_tool_choice_unsupported(exc: BaseException) -> bool:
     return bool(TOOL_CHOICE_HINT_RE.search(text))
 
 
+def _full_message(obj: Any) -> Any:
+    """Return the message of a non-streaming completion, else None."""
+    if obj is None or isinstance(obj, (str, bytes, list, tuple)):
+        return None
+    choices = getattr(obj, "choices", None)
+    if not choices:
+        return None
+    first = choices[0]
+    if getattr(first, "message", None) is not None and not hasattr(first, "delta"):
+        return first.message
+    return None
+
+
+def _tool_calls_from_message(message_obj: Any) -> list[dict[str, str]]:
+    raw = getattr(message_obj, "tool_calls", None)
+    if raw is None and isinstance(message_obj, dict):
+        raw = message_obj.get("tool_calls")
+    calls: list[dict[str, str]] = []
+    for index, tc in enumerate(raw or []):
+        if isinstance(tc, dict):
+            fn = tc.get("function") or {}
+            name = fn.get("name") if isinstance(fn, dict) else ""
+            arguments = fn.get("arguments") if isinstance(fn, dict) else ""
+            call_id = tc.get("id") or ""
+        else:
+            fn = getattr(tc, "function", None)
+            name = getattr(fn, "name", "") if fn is not None else ""
+            arguments = getattr(fn, "arguments", "") if fn is not None else ""
+            call_id = getattr(tc, "id", "") or ""
+        calls.append(
+            {
+                "id": call_id or f"call_{index}",
+                "name": name or "",
+                "arguments": arguments or "",
+            }
+        )
+    return calls
+
+
+def _absorb_tool_delta(tool_calls: dict[int, dict[str, str]], tc: Any) -> None:
+    idx = tc.index if getattr(tc, "index", None) is not None else 0
+    slot = tool_calls.setdefault(idx, {"id": "", "name": "", "arguments": ""})
+    if getattr(tc, "id", None):
+        slot["id"] = tc.id
+    function = getattr(tc, "function", None)
+    if function is not None and getattr(function, "name", None):
+        slot["name"] = function.name
+    if function is not None and getattr(function, "arguments", None):
+        slot["arguments"] += function.arguments
+
+
 FABRICATION_NUDGE = (
     "Never write tool_response tags or invent command output. Call the "
     "tool now and report only its real result."
@@ -150,6 +229,12 @@ FABRICATION_NUDGE_ESCALATED = (
     '{"name": "run_command", "arguments": {"command": "<the actual command>"}}\n'
     "Use ssh_run instead of run_command for remote hosts. No prose, no "
     "tool_response tags, no invented output."
+)
+
+REASONING_ONLY_NUDGE = (
+    "Your previous reply was only reasoning and had no final answer. "
+    "Reply now with the final answer as normal text, or call a tool. "
+    "Do not stop at reasoning."
 )
 
 NUDGE_MESSAGE = (
@@ -410,6 +495,11 @@ class AgentUI:
     def on_status(self, text: str) -> None: ...
     def on_assistant_delta(self, text: str) -> None: ...
     def on_assistant_done(self, text: str) -> None: ...
+    def on_thought_delta(self, text: str) -> None:
+        """Streamed reasoning / chain-of-thought. Dim it; it is not the answer."""
+
+    def on_thought_done(self, text: str) -> None:
+        """Reasoning for this step is complete."""
     def on_action(self, tool_name: str, arguments: dict) -> None: ...
     def on_observation(self, tool_name: str, result: str) -> None: ...
     def on_error(self, message: str) -> None: ...
@@ -445,12 +535,25 @@ class Agent:
         self.device = "…"
         self.prompt_tokens = 0
         self.completion_tokens = 0
+        self._exchange_start = 0
+        self.on_fallback = False
+        # (base_url, api_key, model, api_key_var) captured when we leave primary.
+        self.primary_target: tuple[str, str, str, str] | None = None
 
-    def retarget(self, *, base_url: str, api_key: str, model: str) -> None:
+    def retarget(
+        self,
+        *,
+        base_url: str,
+        api_key: str,
+        model: str,
+        api_key_var: str | None = None,
+    ) -> None:
         """Point the next request at another host without restarting."""
         self.config.base_url = base_url
         self.config.api_key = api_key
         self.config.model = model
+        if api_key_var:
+            self.config.api_key_var = api_key_var
         self.client = OpenAI(
             api_key=api_key or "none",
             base_url=base_url,
@@ -524,7 +627,7 @@ class Agent:
     # ------------------------------------------------------------------- loop
 
     def run(self, user_input: str) -> str:
-        rollback_marker = len(self.messages)
+        self._exchange_start = len(self.messages)
         if AFFIRMATION_RE.match(user_input.strip()):
             last_assistant = next(
                 (
@@ -551,7 +654,7 @@ class Agent:
 
         def roll_back(reason: str) -> str:
             """Discard the poisoned exchange so history stays clean."""
-            del self.messages[rollback_marker:]
+            del self.messages[self._exchange_start :]
             self.ui.on_error(reason)
             return ""
         def finish(content: str) -> str | None:
@@ -692,10 +795,12 @@ class Agent:
                     )
                     continue
                 if not content:
+                    reasoning_only = bool(message.get("_reasoning_only"))
                     # After tools, empty replies are common on some servers —
                     # one retry, then finish with observations (don't burn
-                    # max_steps / roll back successful work).
-                    if tool_used:
+                    # max_steps / roll back successful work). Reasoning-only
+                    # replies are not an answer, so they keep the retry path.
+                    if tool_used and not reasoning_only:
                         if nudges["empty"] < 1:
                             nudges["empty"] += 1
                             self.ui.on_status(
@@ -717,21 +822,28 @@ class Agent:
                         return done
                     if nudges["empty"] < 2:
                         nudges["empty"] += 1
-                        self.ui.on_status(
-                            "model returned an empty response - retrying"
-                        )
-                        self.messages.append(
-                            {
-                                "role": "user",
-                                "content": (
-                                    "Your previous response was empty. "
-                                    "Respond now: either call the "
-                                    "appropriate tool, or write your full "
-                                    "answer as text."
-                                ),
-                            }
-                        )
+                        if reasoning_only:
+                            self.ui.on_status(
+                                "model returned reasoning only — asking for a final answer"
+                            )
+                            nudge = REASONING_ONLY_NUDGE
+                        else:
+                            self.ui.on_status(
+                                "model returned an empty response - retrying"
+                            )
+                            nudge = (
+                                "Your previous response was empty. "
+                                "Respond now: either call the "
+                                "appropriate tool, or write your full "
+                                "answer as text."
+                            )
+                        self.messages.append({"role": "user", "content": nudge})
                         continue
+                    if reasoning_only:
+                        return roll_back(
+                            "model returned only reasoning and no final answer; "
+                            "rolled back this exchange - try rephrasing"
+                        )
                     return roll_back(
                         "model returned only empty responses; rolled back "
                         "this exchange - try rephrasing"
@@ -865,9 +977,14 @@ class Agent:
         messages: list[dict[str, Any]],
     ) -> list[dict[str, Any]]:
         """Ollama 400s on assistant messages with null content and no
-        tool_calls; scrub any that slipped in (e.g. from saved sessions)."""
+        tool_calls; scrub any that slipped in (e.g. from saved sessions).
+
+        Keys starting with ``_`` are local bookkeeping and must not be sent.
+        """
         cleaned = []
         for m in messages:
+            if any(str(key).startswith("_") for key in m):
+                m = {k: v for k, v in m.items() if not str(k).startswith("_")}
             if (
                 m.get("role") == "assistant"
                 and m.get("content") is None
@@ -877,7 +994,38 @@ class Agent:
             cleaned.append(m)
         return cleaned
 
-    def _create_completion(self, *, tools: bool, include_usage: bool = True):
+    def _fit_context(self, *, force: bool = False) -> None:
+        """Summarize older turns before the request outgrows the window."""
+        protect = max(0, len(self.messages) - self._exchange_start)
+        budget = completion_budget(self.config.context_tokens)
+        if force:
+            budget = max(256, budget // 2)
+        updated, info = compact_messages(
+            self.messages,
+            max_tokens=budget,
+            protect_tail=protect,
+            force=force,
+        )
+        if info is None:
+            return
+        self.messages = updated
+        tail_len = int(info.get("tail_len", protect))
+        self._exchange_start = max(0, len(self.messages) - tail_len)
+        self.ui.on_status(
+            "context full — summarized "
+            f"{info.get('dropped_messages', 0)} older messages "
+            f"(~{info.get('after_tokens', 0)} tokens, "
+            f"limit {self.config.context_tokens})"
+        )
+
+    def _create_completion(
+        self,
+        *,
+        tools: bool,
+        include_usage: bool = True,
+        context_retry: bool = False,
+    ):
+        self._fit_context()
         anthropic = "api.anthropic.com" in self.config.base_url
         kwargs: dict[str, Any] = {
             "model": self.config.model,
@@ -899,10 +1047,24 @@ class Agent:
             return self.client.chat.completions.create(**kwargs)
         except Exception as exc:
             if include_usage and "stream_options" in str(exc).lower():
-                return self._create_completion(tools=tools, include_usage=False)
+                return self._create_completion(
+                    tools=tools,
+                    include_usage=False,
+                    context_retry=context_retry,
+                )
+            if not context_retry and is_context_length_error(exc):
+                self.ui.on_status(
+                    "context limit hit — compacting history and retrying"
+                )
+                self._fit_context(force=True)
+                return self._create_completion(
+                    tools=tools,
+                    include_usage=include_usage,
+                    context_retry=True,
+                )
             raise
 
-    def _open_stream(self):
+    def _open_stream_once(self):
         """Stream a turn; fall back if the server cannot do native tools."""
         if self._native_tools:
             try:
@@ -916,40 +1078,172 @@ class Agent:
                 )
         return self._create_completion(tools=False)
 
+    def _try_fallback(self, exc: BaseException) -> bool:
+        """Switch to the fallback host on connection failures only."""
+        fallback = (self.config.fallback_base_url or "").strip()
+        if not fallback or self.on_fallback:
+            return False
+        if not is_connection_failure(exc):
+            return False
+        try:
+            fallback = normalize_base_url(fallback)
+        except ValueError:
+            pass
+        if fallback.rstrip("/") == self.config.base_url.rstrip("/"):
+            return False
+        self._activate_fallback(fallback, exc)
+        return True
+
+    def _activate_fallback(self, fallback: str, exc: BaseException) -> None:
+        model = self.config.fallback_model or self.config.model
+        if self.config.fallback_api_key:
+            key = self.config.fallback_api_key
+            key_var = "HFAGENT_FALLBACK_API_KEY"
+        else:
+            key, key_var = api_key_info(fallback)
+        if not self.on_fallback:
+            self.primary_target = (
+                self.config.base_url,
+                self.config.api_key,
+                self.config.model,
+                self.config.api_key_var,
+            )
+        kind = classify_api_failure(exc) or "connect"
+        self.on_fallback = True
+        self.ui.on_system(
+            f"Primary host unreachable ({kind_label(kind)}): {self.config.base_url}\n"
+            f"Switched to fallback {fallback} · model {model}.\n"
+            "Type /primary to switch back."
+        )
+        self.ui.on_status("using fallback host — /primary to switch back")
+        self.retarget(
+            base_url=fallback,
+            api_key=key,
+            model=model,
+            api_key_var=key_var,
+        )
+        self.config.sources["base_url"] = "HFAGENT_FALLBACK_BASE_URL"
+        if self.config.fallback_model:
+            self.config.sources["model"] = "HFAGENT_FALLBACK_MODEL"
+
+    def _open_stream(self):
+        try:
+            stream = self._open_stream_once()
+        except Exception as exc:
+            if not self._try_fallback(exc):
+                raise
+            stream = self._open_stream_once()
+        return self._retry_stream_on_disconnect(stream)
+
+    def _retry_stream_on_disconnect(self, stream: Any):
+        """If the socket dies before any token, try the fallback host once."""
+        message = _full_message(stream)
+        if message is not None:
+            return stream
+        try:
+            iterator = iter(stream)
+        except TypeError:
+            return stream
+        try:
+            first = next(iterator)
+        except StopIteration:
+            return iter(())
+        except Exception as exc:
+            if not self._try_fallback(exc):
+                raise
+            return self._open_stream_once()
+
+        def chained():
+            yield first
+            yield from iterator
+
+        return chained()
+
     def _step(self) -> dict[str, Any]:
         """One model turn: stream text + tool calls, then run pending tools."""
         content_parts: list[str] = []
+        thought_parts: list[str] = []
         tool_calls: dict[int, dict[str, str]] = {}
-
-        stream = self._open_stream()
+        splitter = ThinkSplitter()
         prompt_tokens = 0
         completion_tokens = 0
-        for chunk in stream:
-            usage = getattr(chunk, "usage", None)
-            if usage is not None:
-                prompt_tokens = int(getattr(usage, "prompt_tokens", 0) or 0)
-                completion_tokens = int(getattr(usage, "completion_tokens", 0) or 0)
-            if not chunk.choices:
-                continue
-            delta = chunk.choices[0].delta
-            if delta is None:
-                continue
-            if delta.content:
-                content_parts.append(delta.content)
-                self.ui.on_assistant_delta(delta.content)
-            for tc in delta.tool_calls or []:
-                idx = tc.index if tc.index is not None else 0
-                slot = tool_calls.setdefault(
-                    idx, {"id": "", "name": "", "arguments": ""}
-                )
-                if tc.id:
-                    slot["id"] = tc.id
-                if tc.function and tc.function.name:
-                    slot["name"] = tc.function.name
-                if tc.function and tc.function.arguments:
-                    slot["arguments"] += tc.function.arguments
+
+        def add_answer(text: str) -> None:
+            if not text:
+                return
+            content_parts.append(text)
+            self.ui.on_assistant_delta(text)
+
+        def add_thought(text: str) -> None:
+            if not text:
+                return
+            thought_parts.append(text)
+            self.ui.on_thought_delta(text)
+
+        def absorb_content(text: str) -> None:
+            answer, thought = splitter.feed(text)
+            add_thought(thought)
+            add_answer(answer)
+
+        def note_usage(obj: Any) -> None:
+            nonlocal prompt_tokens, completion_tokens
+            usage = getattr(obj, "usage", None)
+            if usage is None and isinstance(obj, dict):
+                usage = obj.get("usage")
+            if usage is None:
+                return
+            if isinstance(usage, dict):
+                prompt_tokens = int(usage.get("prompt_tokens") or 0)
+                completion_tokens = int(usage.get("completion_tokens") or 0)
+                return
+            prompt_tokens = int(getattr(usage, "prompt_tokens", 0) or 0)
+            completion_tokens = int(getattr(usage, "completion_tokens", 0) or 0)
+
+        def absorb_message(message_obj: Any) -> None:
+            add_thought(reasoning_text(message_obj))
+            body = getattr(message_obj, "content", None)
+            if body is None and isinstance(message_obj, dict):
+                body = message_obj.get("content")
+            if isinstance(body, str) and body:
+                absorb_content(body)
+            for index, call in enumerate(_tool_calls_from_message(message_obj)):
+                tool_calls[index] = call
+
+        stream = self._open_stream()
+        full = _full_message(stream)
+        if full is not None:
+            note_usage(stream)
+            absorb_message(full)
+        else:
+            for chunk in stream:
+                note_usage(chunk)
+                choices = getattr(chunk, "choices", None)
+                if not choices:
+                    add_thought(reasoning_text(chunk))
+                    continue
+                choice = choices[0]
+                delta = getattr(choice, "delta", None)
+                if delta is None:
+                    embedded = getattr(choice, "message", None)
+                    if embedded is not None:
+                        absorb_message(embedded)
+                    continue
+                add_thought(reasoning_text(delta))
+                if getattr(delta, "content", None):
+                    absorb_content(delta.content)
+                for tc in getattr(delta, "tool_calls", None) or []:
+                    _absorb_tool_delta(tool_calls, tc)
+
+        tail_answer, tail_thought = splitter.finish()
+        add_thought(tail_thought)
+        add_answer(tail_answer)
 
         content = "".join(content_parts)
+        thought = "".join(thought_parts).strip()
+        if thought and not content.strip():
+            content = ""
+        if thought:
+            self.ui.on_thought_done(thought)
         self._report_runtime(prompt_tokens, completion_tokens)
 
         ordered = [tool_calls[i] for i in sorted(tool_calls)]
@@ -972,6 +1266,9 @@ class Agent:
         # NOTE: never store None here - Ollama rejects assistant messages with
         # null content when they carry no tool_calls; empty string is safe.
         message: dict[str, Any] = {"role": "assistant", "content": content}
+        if thought and not content.strip() and not ordered:
+            message["content"] = ""
+            message["_reasoning_only"] = True
         if ordered:
             message["tool_calls"] = [
                 {

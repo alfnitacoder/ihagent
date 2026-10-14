@@ -141,6 +141,13 @@ class DeltaMsg(Message):
         self.text = text
 
 
+class ThoughtMsg(Message):
+    def __init__(self, text: str, done: bool = False) -> None:
+        super().__init__()
+        self.text = text
+        self.done = done
+
+
 class DoneMsg(Message):
     def __init__(self, text: str) -> None:
         super().__init__()
@@ -215,6 +222,12 @@ class TuiBridge(AgentUI):
 
     def on_assistant_done(self, text: str) -> None:
         self.app.post_message(DoneMsg(text))
+
+    def on_thought_delta(self, text: str) -> None:
+        self.app.post_message(ThoughtMsg(text))
+
+    def on_thought_done(self, text: str) -> None:
+        self.app.post_message(ThoughtMsg(text, done=True))
 
     def on_action(self, tool_name: str, arguments: dict) -> None:
         self.app.post_message(ActionMsg(tool_name, arguments))
@@ -495,6 +508,13 @@ class HfAgentApp(App):
         height: auto;
     }
 
+    .thought {
+        color: $foreground 55%;
+        text-style: italic;
+        margin: 0 0 0 0;
+        height: auto;
+    }
+
     .error {
         color: $error;
         background: $error 12%;
@@ -605,6 +625,8 @@ class HfAgentApp(App):
         self._busy = False
         self._stream: Any = None
         self._stream_widget: Markdown | None = None
+        self._thought_widget: Static | None = None
+        self._thought_buf = ""
         self._last_assistant_text = ""
         self._approval_queue: queue.Queue[bool] | None = None
         self._device = "…"
@@ -781,6 +803,8 @@ class HfAgentApp(App):
     async def clear_transcript(self) -> None:
         self._last_assistant_text = ""
         self._stream_widget = None
+        self._thought_widget = None
+        self._thought_buf = ""
         chat = self.query_one("#chat")
         await chat.remove_children()
         await self._mount_banner()
@@ -986,7 +1010,16 @@ class HfAgentApp(App):
             self.agent.run(prompt)
             save_session(self.agent.messages, self.agent.config.model)
         except Exception as exc:
-            self.post_message(ErrorMsg(format_api_error(exc)))
+            self.post_message(
+                ErrorMsg(
+                    format_api_error(
+                        exc,
+                        base_url=self.agent.config.base_url,
+                        model=self.agent.config.model,
+                        key_var=self.agent.config.api_key_var,
+                    )
+                )
+            )
         finally:
             self.post_message(TurnDone())
 
@@ -1026,6 +1059,27 @@ class HfAgentApp(App):
         self._prompt_tokens = event.prompt_tokens
         self._completion_tokens = event.completion_tokens
         self.refresh_header()
+
+    async def on_thought_msg(self, event: ThoughtMsg) -> None:
+        if event.done:
+            self._thought_widget = None
+            self._thought_buf = ""
+            return
+        if not event.text:
+            return
+        chat = self.query_one("#chat")
+        widget = self._thought_widget
+        if widget is None or widget.parent is None:
+            widget = Static("", markup=False, classes="thought")
+            await chat.mount(widget)
+            self._thought_widget = widget
+            self._thought_buf = ""
+        self._thought_buf += event.text
+        shown = self._thought_buf
+        if len(shown) > 2000:
+            shown = shown[:2000] + " …"
+        widget.update("thought: " + shown)
+        chat.scroll_end(animate=False)
 
     async def on_delta_msg(self, event: DeltaMsg) -> None:
         if not event.text:

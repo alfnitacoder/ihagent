@@ -10,9 +10,11 @@ from hfagent.tools import default_registry
 # ----------------------------------------------------------- fake openai client
 
 class Delta:
-    def __init__(self, content=None, tool_calls=None):
+    def __init__(self, content=None, tool_calls=None, reasoning=None, reasoning_content=None):
         self.content = content
         self.tool_calls = tool_calls
+        self.reasoning = reasoning
+        self.reasoning_content = reasoning_content
 
 
 class ToolCallDelta:
@@ -63,6 +65,7 @@ class Recorder(AgentUI):
         self.observations = []
         self.approvals = []
         self.deltas = []
+        self.thoughts = []
         self.errors = []
         self.statuses = []
         self.allow = True
@@ -75,6 +78,9 @@ class Recorder(AgentUI):
 
     def on_assistant_delta(self, text):
         self.deltas.append(text)
+
+    def on_thought_delta(self, text):
+        self.thoughts.append(text)
 
     def on_error(self, message):
         self.errors.append(message)
