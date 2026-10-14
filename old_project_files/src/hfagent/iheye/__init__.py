@@ -69,6 +69,12 @@ def publish(state: str) -> None:
         get_supervisor().set_state(state)
     except Exception:
         pass
+    try:
+        from ..robot_bridge import bridge
+
+        bridge.note_iheye(state)
+    except Exception:
+        pass
 
 
 def publish_reply(text: str, final: bool = False) -> None:
@@ -91,6 +97,12 @@ def publish_approval(tool: str, preview: str) -> None:
     """Show the y/N card. Never raises."""
     try:
         get_supervisor().note_approval(tool, preview)
+    except Exception:
+        pass
+    try:
+        from ..robot_bridge import bridge
+
+        bridge.note_approval(tool, preview)
     except Exception:
         pass
 
