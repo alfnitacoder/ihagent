@@ -38,6 +38,7 @@ HELP = """\
 /memory           show what the agent remembers long-term
 /skills           list coding skills (builtin + ~/.hfagent/skills)
 /browser [action] status of the ihagent Chrome, or close it
+/iheye [on|off]   floating eye when ihagent is in the background (macOS)
 /forget           wipe long-term memory
 /cloud            use Ollama Cloud (saved for the next launch)
 /local            use Ollama on this PC (saved for the next launch)
@@ -136,6 +137,12 @@ def dispatch_slash(agent: Agent, ui: AgentUI, line: str) -> SlashResult:
         from .browser import browser_command
 
         ui.on_system(browser_command(arg))
+        return "handled"
+
+    if command == "/iheye":
+        from .iheye import handle_command
+
+        ui.on_status(handle_command(arg))
         return "handled"
 
     if command == "/clear":

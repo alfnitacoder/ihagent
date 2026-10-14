@@ -82,6 +82,7 @@ Click a session in the sidebar to resume it.
 | `/sessions` | list saved sessions |
 | `/resume [name]` | load a saved session |
 | `/browser` | ihagent Chrome status, or `/browser close` |
+| `/iheye` | floating eye status, or `/iheye on` / `/iheye off` |
 | `/clear` | reset the conversation |
 | `/exit` | quit |
 
@@ -161,6 +162,55 @@ pip install 'hfagent[browser]' && playwright install chrome
 | `HFAGENT_BROWSER_TIMEOUT_MS` | `30000` | navigation and action timeout |
 | `HFAGENT_BROWSER_MAX_CHARS` | `6000` | cap for `browser_read` and snapshots |
 
+## iheye
+
+On macOS, ihagent can show a small always-on-top **iheye** bubble while you
+are in another app. It hides when the terminal running ihagent is focused
+again. Clicking the bubble brings that terminal back to the front. You can
+drag it; the position is saved in `~/.hfagent/iheye-position.json`.
+
+The bubble is a separate helper process (`python -m hfagent.iheye`). It uses
+a borderless, non-activating floating panel on all Spaces, watches which app
+is frontmost, and exits when ihagent exits. Terminal.app and iTerm2 hide the
+bubble only when the ihagent window or tab is the focused one. Other hosts
+(Warp, VS Code, Cursor, Ghostty, kitty, WezTerm, Alacritty, Hyper) hide it
+whenever that app is frontmost.
+
+The eye follows the agent: calm when idle, a moving pupil while thinking,
+an amber pulse when a y/N approval is waiting, and a green pulse when a turn
+finishes.
+
+It is on by default on macOS. Elsewhere it does nothing.
+
+```bash
+pip install 'hfagent[iheye]'
+ihagent
+```
+
+If PyObjC is not installed, ihagent keeps running and prints:
+
+```text
+pip install 'hfagent[iheye]'
+```
+
+| Env var | Default | Meaning |
+| :--- | :--- | :--- |
+| `HFAGENT_IHEYE` | `1` on macOS, `0` elsewhere | `0` / `off` disables the bubble; `/iheye on` and `/iheye off` persist the choice in `~/.hfagent/.env` |
+
+### Manual check on a Mac
+
+1. `pip install 'hfagent[iheye]'` in `~/hf/.venv`, then start `ihagent` in Terminal, iTerm2, Warp, VS Code, or Cursor.
+2. The bubble stays hidden while that terminal is focused.
+3. Switch to another app (Safari, for example). A small eye labeled **iheye** appears above other windows, including other Spaces.
+4. Drag it. Quit ihagent, start it again, switch away: the bubble comes back near where you left it.
+5. Click the bubble. The ihagent terminal comes forward and the bubble hides.
+6. In Terminal.app or iTerm2, focus a different window or tab: the bubble stays visible. Focusing the ihagent tab hides it.
+7. Ask ihagent to write a file (so it waits on y/N) and switch away. The eye pulses amber until you answer.
+8. When the turn finishes and you are still in another app, the eye pulses green.
+9. `/iheye off` removes it and remembers that. `/iheye on` brings it back. `HFAGENT_IHEYE=0 ihagent` does not start it.
+10. Quit ihagent. The bubble disappears. `pgrep -fl hfagent.iheye` prints nothing.
+11. If the bubble never appears, read `~/.hfagent/iheye.log`.
+
 ## Configuration
 
 Settings come from one ordered list. The first source that sets a value wins.
@@ -200,6 +250,7 @@ as the file, so it does not hide a newer model in the project `.env` or in
 | `HFAGENT_BROWSER_DOWNLOAD_DIR` | `~/Downloads/ihagent` | download and screenshot directory |
 | `HFAGENT_BROWSER_CHANNEL` | auto | Playwright channel; macOS prefers `chrome` |
 | `HFAGENT_BROWSER_EXECUTABLE` | auto | optional Chrome executable path |
+| `HFAGENT_IHEYE` | on for macOS | `0` hides the floating iheye bubble; `/iheye on` or `/iheye off` |
 
 ### Hugging Face GPU (cloud)
 

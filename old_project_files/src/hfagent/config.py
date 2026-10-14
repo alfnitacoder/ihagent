@@ -51,6 +51,7 @@ _ALIASES = {
     "hfagent_browser_executable": "HFAGENT_BROWSER_EXECUTABLE",
     "hfagent_browser_timeout_ms": "HFAGENT_BROWSER_TIMEOUT_MS",
     "hfagent_browser_max_chars": "HFAGENT_BROWSER_MAX_CHARS",
+    "hfagent_iheye": "HFAGENT_IHEYE",
 }
 
 # key -> (value in the process before we wrote it, value we wrote)
@@ -686,7 +687,16 @@ def format_config_report(config: "Config") -> str:
         source = config.sources.get(name, "default")
         lines.append(f"{name}={shown}  [{source}]")
     lines.extend(_browser_report_lines())
+    lines.extend(_iheye_report_lines())
     return "\n".join(lines)
+
+
+def _iheye_report_lines() -> list[str]:
+    try:
+        from .iheye import config_report_lines
+    except Exception:
+        return []
+    return config_report_lines()
 
 
 def _browser_report_lines() -> list[str]:
