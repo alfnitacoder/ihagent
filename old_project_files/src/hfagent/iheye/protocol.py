@@ -32,7 +32,11 @@ def decode(line: bytes | str) -> dict[str, Any] | None:
 
 
 class EyeServer:
-    """Accepts one client at a time and hands each JSON object to ``on_message``."""
+    """Accepts one client at a time and hands each JSON object to ``on_message``.
+
+    ``send`` writes back to that client (hover chat, approvals, hints). If the
+    agent has not connected yet, the newest messages wait in a short queue.
+    """
 
     def __init__(self, path: str, on_message: Callable[[dict[str, Any]], None]) -> None:
         self.path = path
@@ -40,6 +44,9 @@ class EyeServer:
         self._stop = threading.Event()
         self._sock: socket.socket | None = None
         self._thread: threading.Thread | None = None
+        self._conn: socket.socket | None = None
+        self._write_lock = threading.Lock()
+        self._outbox: list[dict[str, Any]] = []
 
     def start(self) -> None:
         parent = os.path.dirname(self.path)
@@ -60,6 +67,25 @@ class EyeServer:
         self._sock = sock
         self._thread = threading.Thread(target=self._loop, name="iheye-ipc", daemon=True)
         self._thread.start()
+
+    def send(self, message: dict[str, Any]) -> bool:
+        """Write one JSON line to the agent. False means it is queued."""
+        data = encode(message)
+        with self._write_lock:
+            conn = self._conn
+            if conn is None:
+                self._outbox.append(message)
+                del self._outbox[:-32]
+                return False
+            try:
+                conn.sendall(data)
+                return True
+            except OSError:
+                if self._conn is conn:
+                    self._conn = None
+                self._outbox.append(message)
+                del self._outbox[:-32]
+                return False
 
     def stop(self) -> None:
         self._stop.set()
@@ -94,16 +120,17 @@ class EyeServer:
                     break
                 conn.settimeout(0.3)
                 buf = b""
+                self._attach(conn)
             try:
                 chunk = conn.recv(4096)
             except socket.timeout:
                 continue
             except OSError:
-                self._close(conn)
+                self._detach(conn)
                 conn = None
                 continue
             if not chunk:
-                self._close(conn)
+                self._detach(conn)
                 conn = None
                 continue
             buf += chunk
@@ -116,7 +143,21 @@ class EyeServer:
                     except Exception:
                         pass
         if conn is not None:
-            self._close(conn)
+            self._detach(conn)
+
+    def _attach(self, conn: socket.socket) -> None:
+        with self._write_lock:
+            self._conn = conn
+            pending = self._outbox
+            self._outbox = []
+        for message in pending:
+            self.send(message)
+
+    def _detach(self, conn: socket.socket) -> None:
+        with self._write_lock:
+            if self._conn is conn:
+                self._conn = None
+        self._close(conn)
 
     @staticmethod
     def _close(conn: socket.socket) -> None:

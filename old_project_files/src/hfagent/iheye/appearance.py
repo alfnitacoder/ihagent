@@ -109,17 +109,31 @@ def _clamp_pupil(cx: float, cy: float, dx: float, dy: float, limit: float) -> tu
     return cx + dx * scale, cy + dy * scale
 
 
-def eye_geometry(state: str, phase: float, cx: float = 44.0, cy: float = 58.0) -> EyeGeometry:
-    """One frame of the branded eye, ready to stroke with a bezier path."""
+def eye_geometry(
+    state: str,
+    phase: float,
+    cx: float = 44.0,
+    cy: float = 58.0,
+    *,
+    pupil_override: tuple[float, float] | None = None,
+    blink_extra: float = 0.0,
+) -> EyeGeometry:
+    """One frame of the branded eye, ready to stroke with a bezier path.
+
+    ``pupil_override`` replaces the scripted glance (mouse tracking).
+    ``blink_extra`` adds a blink on top of the idle one (keyboard activity).
+    """
     state = normalize_state(state)
     motion = frame_motion(state, phase)
+    blink = min(1.0, motion.blink + max(0.0, blink_extra))
     iris_rgb, glow_rgb = _IRIS[state]
     eye_w = 46.0
-    eye_h = 26.0 * (1.0 - 0.92 * motion.blink)
+    eye_h = 26.0 * (1.0 - 0.92 * blink)
     eye_h = max(eye_h, 2.0)
-    iris_r = max(2.4, 9.0 * (1.0 - 0.85 * motion.blink))
+    iris_r = max(2.4, 9.0 * (1.0 - 0.85 * blink))
     pupil_r = max(1.2, iris_r * 0.48)
-    px, py = _clamp_pupil(cx, cy, motion.pupil[0], motion.pupil[1], iris_r * 0.45)
+    offset = motion.pupil if pupil_override is None else pupil_override
+    px, py = _clamp_pupil(cx, cy, offset[0], offset[1], iris_r * 0.45)
     return EyeGeometry(
         left=cx - eye_w / 2,
         right=cx + eye_w / 2,

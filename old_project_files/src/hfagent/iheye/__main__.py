@@ -22,6 +22,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--host-pid", type=int, default=0)
     parser.add_argument("--ancestors", default="")
     parser.add_argument("--tty", default="")
+    parser.add_argument("--track", default="1", help="1 to follow the pointer")
+    parser.add_argument("--summary", default="1", help="1 to show the completion card")
     return parser
 
 

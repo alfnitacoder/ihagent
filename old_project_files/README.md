@@ -82,7 +82,7 @@ Click a session in the sidebar to resume it.
 | `/sessions` | list saved sessions |
 | `/resume [name]` | load a saved session |
 | `/browser` | ihagent Chrome status, or `/browser close` |
-| `/iheye` | floating eye status, or `/iheye on` / `/iheye off` |
+| `/iheye` | floating eye status, or `on` / `off` / `track` / `summary` |
 | `/clear` | reset the conversation |
 | `/exit` | quit |
 
@@ -180,6 +180,30 @@ The eye follows the agent: calm when idle, a moving pupil while thinking,
 an amber pulse when a y/N approval is waiting, and a green pulse when a turn
 finishes.
 
+Hover the eye and a small panel drops down under it. Type a message and press
+Enter. ihagent treats that line as if you typed it in the TUI: the transcript
+shows it, and the reply streams back into the panel (trimmed to the latest
+lines). The panel stays open while the pointer is over the eye or the panel,
+or while the text field has focus. Esc closes it. Moving the pointer away
+closes it after a short delay. The field can take keyboard focus without
+keeping you out of the app you were using; after you send, focus goes back
+there when the helper had become the frontmost app.
+
+When a turn finishes and you are in another app, a card under the eye shows
+the first few lines of the answer (no extra model call). It hides after about
+8 seconds unless you are hovering it. Click the card to open the ihagent
+terminal. If a tool is waiting on y/N, the card has **y** and **N** buttons
+that answer that prompt.
+
+The pupil follows the pointer anywhere on the screen. Typing in another app
+makes the eye glance and blink. The helper only notices that a key went down.
+It does not read which key. Pointer tracking uses `NSEvent.mouseLocation` and
+needs no extra permission. The key glances use a global monitor; if macOS
+Accessibility permission is missing, glances are skipped, the pupil still
+follows the pointer, and a hint is printed to `~/.hfagent/iheye.log` and to
+the ihagent process. Idle animation ticks slowly so the eye stays cheap when
+nothing is moving.
+
 It is on by default on macOS. Elsewhere it does nothing.
 
 ```bash
@@ -196,6 +220,8 @@ pip install 'hfagent[iheye]'
 | Env var | Default | Meaning |
 | :--- | :--- | :--- |
 | `HFAGENT_IHEYE` | `1` on macOS, `0` elsewhere | `0` / `off` disables the bubble; `/iheye on` and `/iheye off` persist the choice in `~/.hfagent/.env` |
+| `HFAGENT_IHEYE_TRACK` | `1` | `0` / `off` stops the pupil following the pointer and keyboard activity. `/iheye track on` and `/iheye track off` persist it |
+| `HFAGENT_IHEYE_SUMMARY` | `1` | `0` / `off` hides the completion card. `/iheye summary on` and `/iheye summary off` persist it. The y/N card still shows |
 
 ### Manual check on a Mac
 
@@ -205,11 +231,15 @@ pip install 'hfagent[iheye]'
 4. Drag it. Quit ihagent, start it again, switch away: the bubble comes back near where you left it.
 5. Click the bubble. The ihagent terminal comes forward and the bubble hides.
 6. In Terminal.app or iTerm2, focus a different window or tab: the bubble stays visible. Focusing the ihagent tab hides it.
-7. Ask ihagent to write a file (so it waits on y/N) and switch away. The eye pulses amber until you answer.
-8. When the turn finishes and you are still in another app, the eye pulses green.
-9. `/iheye off` removes it and remembers that. `/iheye on` brings it back. `HFAGENT_IHEYE=0 ihagent` does not start it.
-10. Quit ihagent. The bubble disappears. `pgrep -fl hfagent.iheye` prints nothing.
-11. If the bubble never appears, read `~/.hfagent/iheye.log`.
+7. Ask ihagent to write a file (so it waits on y/N) and switch away. The eye pulses amber, and a card under it offers **y** and **N**. Press **N** on the card. The TUI prompt closes as a decline. Run it again and press **y**. The command runs.
+8. When the turn finishes and you are still in another app, the eye pulses green and a short card shows the first lines of the answer. It disappears after about 8 seconds. Hovering the card keeps it up. Clicking it brings the terminal forward.
+9. Hover the eye. A panel opens under it with a text field. Type `what time is it`, press Enter. The TUI shows that line and the reply, and the panel shows the reply as it arrives. The app you were in stays in front (or comes back after you send).
+10. Press Esc. The panel closes. Hover again, then move the pointer away: the panel closes after a brief moment. If the text field is focused, moving away does not close it until you leave the field.
+11. Move the pointer around the screen. The pupil follows it. Type in the other app: the eye glances or blinks. Nothing you type is written to `~/.hfagent/iheye.log`.
+12. `/iheye track off` stops the pupil following, and remembers that. `/iheye track on` turns it back on. `/iheye summary off` skips the completion card. `/iheye off` removes the bubble. `/iheye on` brings it back. `HFAGENT_IHEYE=0 ihagent` does not start it. `HFAGENT_IHEYE_TRACK=0` and `HFAGENT_IHEYE_SUMMARY=0` do the same as the slash commands for one launch.
+13. Quit ihagent. The bubble disappears. `pgrep -fl hfagent.iheye` prints nothing.
+14. If the bubble never appears, read `~/.hfagent/iheye.log`.
+15. If the pupil follows the pointer but typing does not make it glance, the log contains an Accessibility hint. Mouse tracking still works without that permission. System Settings → Privacy & Security → Accessibility, and enable the Python that runs ihagent.
 
 ## Configuration
 
@@ -251,6 +281,8 @@ as the file, so it does not hide a newer model in the project `.env` or in
 | `HFAGENT_BROWSER_CHANNEL` | auto | Playwright channel; macOS prefers `chrome` |
 | `HFAGENT_BROWSER_EXECUTABLE` | auto | optional Chrome executable path |
 | `HFAGENT_IHEYE` | on for macOS | `0` hides the floating iheye bubble; `/iheye on` or `/iheye off` |
+| `HFAGENT_IHEYE_TRACK` | on | `0` stops pointer and keyboard glances; `/iheye track off` |
+| `HFAGENT_IHEYE_SUMMARY` | on | `0` hides the completion card; `/iheye summary off` |
 
 ### Hugging Face GPU (cloud)
 

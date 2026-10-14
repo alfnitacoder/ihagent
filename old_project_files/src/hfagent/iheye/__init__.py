@@ -20,6 +20,8 @@ from .supervisor import (
     EyeSupervisor,
     enabled_from_env,
     pyobjc_available,
+    summary_enabled,
+    track_enabled,
 )
 from .supervisor import supervisor as get_supervisor
 
@@ -27,13 +29,23 @@ __all__ = [
     "INSTALL_HINT",
     "STATES",
     "EyeStatus",
+    "bind_handlers",
+    "clear_approval",
     "config_report_lines",
     "enabled_from_env",
     "handle_command",
     "publish",
+    "publish_approval",
+    "publish_reply",
+    "publish_summary",
     "start_if_enabled",
     "stop",
+    "summary_enabled",
+    "track_enabled",
+    "unbind_handlers",
 ]
+
+USAGE = "usage: /iheye on|off | track on|off | summary on|off"
 
 _ATEXIT = False
 
@@ -51,6 +63,56 @@ def publish(state: str) -> None:
         return
     try:
         get_supervisor().set_state(state)
+    except Exception:
+        pass
+
+
+def publish_reply(text: str, final: bool = False) -> None:
+    """Latest assistant text for the hover panel. Never raises."""
+    try:
+        get_supervisor().note_reply(text, final=final)
+    except Exception:
+        pass
+
+
+def publish_summary(text: str) -> None:
+    """First lines of a finished turn, for the drop-down card. Never raises."""
+    try:
+        get_supervisor().note_summary(text)
+    except Exception:
+        pass
+
+
+def publish_approval(tool: str, preview: str) -> None:
+    """Show the y/N card. Never raises."""
+    try:
+        get_supervisor().note_approval(tool, preview)
+    except Exception:
+        pass
+
+
+def clear_approval() -> None:
+    try:
+        get_supervisor().note_approval("", "")
+    except Exception:
+        pass
+
+
+def bind_handlers(on_chat, on_approval=None) -> None:
+    """Route overlay chat and y/N into the running session. Never raises."""
+    try:
+        control = get_supervisor()
+        control.on_chat = on_chat
+        control.on_approval = on_approval
+    except Exception:
+        pass
+
+
+def unbind_handlers() -> None:
+    try:
+        control = get_supervisor()
+        control.on_chat = None
+        control.on_approval = None
     except Exception:
         pass
 
@@ -85,25 +147,57 @@ def stop() -> None:
 
 
 def handle_command(arg: str) -> str:
-    """``/iheye``, ``/iheye on``, ``/iheye off``."""
-    text = arg.strip().lower()
-    if text in {"", "status"}:
+    """``/iheye``, ``on|off``, ``track on|off``, ``summary on|off``."""
+    parts = arg.strip().lower().split()
+    if not parts or parts[0] == "status":
         return status_text()
-    if text == "on":
+    head = parts[0]
+    rest = parts[1] if len(parts) > 1 else ""
+    if head == "on":
         os.environ["HFAGENT_IHEYE"] = "1"
-        _persist("1")
+        _persist("HFAGENT_IHEYE", "1")
+        _sync_flags_from_env()
         status = start_if_enabled()
         if status.running:
             return "iheye on"
         if status.reason == "not-macos":
             return "iheye only runs on macOS (saved HFAGENT_IHEYE=1)"
         return status.message or "iheye on"
-    if text == "off":
+    if head == "off":
         os.environ["HFAGENT_IHEYE"] = "0"
-        _persist("0")
+        _persist("HFAGENT_IHEYE", "0")
         stop()
         return "iheye off"
-    return "usage: /iheye on|off"
+    if head == "track":
+        return _toggle_flag("track", "HFAGENT_IHEYE_TRACK", rest)
+    if head == "summary":
+        return _toggle_flag("summary", "HFAGENT_IHEYE_SUMMARY", rest)
+    return USAGE
+
+
+def _toggle_flag(label: str, env_name: str, rest: str) -> str:
+    control = get_supervisor()
+    current = control.track if label == "track" else control.summary_enabled
+    if rest in {"", "status"}:
+        state = "on" if current else "off"
+        return f"iheye {label} {state}"
+    if rest not in {"on", "off"}:
+        return USAGE
+    enabled = rest == "on"
+    os.environ[env_name] = "1" if enabled else "0"
+    _persist(env_name, "1" if enabled else "0")
+    if label == "track":
+        control.note_options(track=enabled)
+    else:
+        control.note_options(summary=enabled)
+    return f"iheye {label} {rest}"
+
+
+def _sync_flags_from_env() -> None:
+    try:
+        get_supervisor().note_options(track=track_enabled(), summary=summary_enabled())
+    except Exception:
+        pass
 
 
 def status_text() -> str:
@@ -112,7 +206,9 @@ def status_text() -> str:
         name = "terminal"
         if control.host is not None and control.host.app_name:
             name = control.host.app_name
-        return f"iheye on · {name} · {control.state}"
+        track = "track on" if control.track else "track off"
+        summary = "summary on" if control.summary_enabled else "summary off"
+        return f"iheye on · {name} · {control.state} · {track} · {summary}"
     if not enabled_from_env():
         raw = os.environ.get("HFAGENT_IHEYE", "")
         if str(raw).strip() == "" and sys.platform != "darwin":
@@ -138,6 +234,18 @@ def config_report_lines() -> list[str]:
         "iheye (floating eye when this terminal is in the background):",
         f"iheye={'on' if enabled else 'off'}  [{source}]",
     ]
+    track_raw = os.environ.get("HFAGENT_IHEYE_TRACK")
+    summary_raw = os.environ.get("HFAGENT_IHEYE_SUMMARY")
+    track_source = "default" if track_raw is None or str(track_raw).strip() == "" else source_of(
+        "HFAGENT_IHEYE_TRACK"
+    )
+    summary_source = (
+        "default" if summary_raw is None or str(summary_raw).strip() == "" else source_of(
+            "HFAGENT_IHEYE_SUMMARY"
+        )
+    )
+    lines.append(f"iheye_track={'on' if track_enabled() else 'off'}  [{track_source}]")
+    lines.append(f"iheye_summary={'on' if summary_enabled() else 'off'}  [{summary_source}]")
     if sys.platform != "darwin":
         lines.append("iheye_platform=not-macos")
     elif pyobjc_available():
@@ -147,10 +255,10 @@ def config_report_lines() -> list[str]:
     return lines
 
 
-def _persist(value: str) -> None:
+def _persist(name: str, value: str) -> None:
     try:
         from ..config import save_user_setting
 
-        save_user_setting("HFAGENT_IHEYE", value)
+        save_user_setting(name, value)
     except Exception:
         pass
