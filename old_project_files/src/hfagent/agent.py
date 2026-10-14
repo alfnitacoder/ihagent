@@ -536,6 +536,7 @@ class Agent:
         self.prompt_tokens = 0
         self.completion_tokens = 0
         self._exchange_start = 0
+        self.session_name: str | None = None
         self.on_fallback = False
         # (base_url, api_key, model, api_key_var) captured when we leave primary.
         self.primary_target: tuple[str, str, str, str] | None = None
@@ -623,6 +624,7 @@ class Agent:
         self.messages = [
             {"role": "system", "content": system_prompt(self.config.base_url)}
         ]
+        self.session_name = None
 
     # ------------------------------------------------------------------- loop
 
