@@ -627,6 +627,16 @@ class Agent:
     # ------------------------------------------------------------------- loop
 
     def run(self, user_input: str) -> str:
+        """Run one turn. iheye shows thinking, then a done pulse."""
+        from .iheye import publish
+
+        publish("thinking")
+        try:
+            return self._run(user_input)
+        finally:
+            publish("done")
+
+    def _run(self, user_input: str) -> str:
         self._exchange_start = len(self.messages)
         if AFFIRMATION_RE.match(user_input.strip()):
             last_assistant = next(
@@ -1369,11 +1379,17 @@ class Agent:
     def _approved(self, tool, args: dict) -> bool:
         if self.config.approval == "auto":
             return True
+        from .iheye import publish
+
+        publish("waiting")
         try:
             preview = tool.preview(**args)
         except Exception:
             preview = None
-        return self.ui.approve(tool.name, args, preview)
+        try:
+            return self.ui.approve(tool.name, args, preview)
+        finally:
+            publish("thinking")
 
     def _truncate(self, text: str) -> str:
         limit = self.config.max_tool_result_chars

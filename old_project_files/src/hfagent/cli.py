@@ -184,6 +184,26 @@ def handle_resume(agent: Agent, ui: AgentUI, name: str) -> None:
     ui.on_status(f"resumed session: {name} ({len(messages)} messages)")
 
 
+def _start_iheye() -> None:
+    try:
+        from .iheye import start_if_enabled
+
+        status = start_if_enabled()
+    except Exception:
+        return
+    if status.reason in {"missing-pyobjc", "helper-exited", "spawn-failed"} and status.message:
+        print(status.message, file=sys.stderr)
+
+
+def _stop_iheye() -> None:
+    try:
+        from .iheye import stop
+
+        stop()
+    except Exception:
+        pass
+
+
 def _shutdown_browser() -> None:
     try:
         from .browser import shutdown_browser
@@ -228,11 +248,13 @@ def main(argv: list[str] | None = None) -> None:
                     "  pip install 'textual>=8'\n"
                     "  or run:  ihagent --console"
                 )
+            _start_iheye()
             run_tui(agent)
             return
         agent, ui = make_agent(args, require_key=bool(args.prompt))
         if args.resume:
             handle_resume(agent, ui, args.resume)
+        _start_iheye()
         if args.prompt:
             agent.run(args.prompt)
             save_session(agent.messages, agent.config.model)
@@ -242,4 +264,5 @@ def main(argv: list[str] | None = None) -> None:
             agent.ui = ui
         repl(agent, ui)
     finally:
+        _stop_iheye()
         _shutdown_browser()
