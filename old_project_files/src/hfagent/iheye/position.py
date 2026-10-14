@@ -44,6 +44,29 @@ def clamp_position(
     return min(max(x, origin_x), max_x), min(max(y, origin_y), max_y)
 
 
+def drop_origin(
+    eye_x: float,
+    eye_y: float,
+    eye_w: float,
+    eye_h: float,
+    drop_w: float,
+    drop_h: float,
+    origin_x: float,
+    origin_y: float,
+    width: float,
+    height: float,
+    gap: float = 6.0,
+) -> tuple[float, float]:
+    """Place the card under the eye. If that would leave the screen, put it above."""
+    x = eye_x + (eye_w - drop_w) / 2.0
+    below = eye_y - drop_h - gap
+    if below >= origin_y:
+        y = below
+    else:
+        y = eye_y + eye_h + gap
+    return clamp_position(x, y, origin_x, origin_y, width, height, drop_w, drop_h)
+
+
 def default_position(
     origin_x: float,
     origin_y: float,

@@ -194,6 +194,22 @@ class TurnDone(Message):
     pass
 
 
+class EyeChatMsg(Message):
+    """A line typed in the iheye hover panel, as if it was the composer."""
+
+    def __init__(self, text: str) -> None:
+        super().__init__()
+        self.text = text
+
+
+class EyeApprovalMsg(Message):
+    """y/N from the iheye card."""
+
+    def __init__(self, yes: bool) -> None:
+        super().__init__()
+        self.yes = yes
+
+
 class ModelsReady(Message):
     def __init__(self, names: list[str]) -> None:
         super().__init__()
@@ -629,6 +645,7 @@ class HfAgentApp(App):
         self._thought_buf = ""
         self._last_assistant_text = ""
         self._approval_queue: queue.Queue[bool] | None = None
+        self._eye_approval: bool | None = None
         self._device = "…"
         self._prompt_tokens = 0
         self._completion_tokens = 0
@@ -660,7 +677,21 @@ class HfAgentApp(App):
         await self._mount_banner()
         await self.replay_history()
         self.query_one(Composer).focus()
+        self._bind_eye()
         self.run_worker(self._probe_device, thread=True, exclusive=False)
+
+    def _bind_eye(self) -> None:
+        from ..iheye import bind_handlers
+
+        app = self
+
+        def on_chat(text: str) -> None:
+            app.post_message(EyeChatMsg(text))
+
+        def on_approval(yes: bool) -> None:
+            app.post_message(EyeApprovalMsg(yes))
+
+        bind_handlers(on_chat, on_approval)
 
     def _probe_device(self) -> None:
         from ..runtime import infer_device
@@ -674,6 +705,12 @@ class HfAgentApp(App):
         )
 
     def on_unmount(self) -> None:
+        try:
+            from ..iheye import unbind_handlers
+
+            unbind_handlers()
+        except Exception:
+            pass
         if self._approval_queue is not None:
             try:
                 self._approval_queue.put_nowait(False)
@@ -972,6 +1009,35 @@ class HfAgentApp(App):
             return
         self.run_worker(partial(self._submit_turn, text))
 
+    def on_eye_chat_msg(self, event: EyeChatMsg) -> None:
+        """Same path as the composer, so the transcript shows the line and the reply."""
+        text = (event.text or "").strip()
+        if not text:
+            return
+        if self._busy:
+            if text.startswith("/") and not is_stop_message(text):
+                self.set_status("still working — type a note, or stop")
+                return
+            self.agent.steer(text)
+            self.run_worker(partial(self._show_steer, text))
+            return
+        if text.startswith("/"):
+            self.run_worker(partial(self._handle_slash, text))
+            return
+        self.run_worker(partial(self._submit_turn, text))
+
+    def on_eye_approval_msg(self, event: EyeApprovalMsg) -> None:
+        if isinstance(self.screen, ApprovalModal):
+            self.screen.dismiss(bool(event.yes))
+            return
+        if self._approval_queue is not None:
+            try:
+                self._approval_queue.put_nowait(bool(event.yes))
+            except queue.Full:
+                pass
+            return
+        self._eye_approval = bool(event.yes)
+
     async def _show_steer(self, text: str) -> None:
         await self.mount_user(text)
         if is_stop_message(text):
@@ -1045,6 +1111,15 @@ class HfAgentApp(App):
     @work
     async def request_approval(self, event: ApprovalMsg) -> None:
         self._approval_queue = event.reply
+        if self._eye_approval is not None:
+            allowed = self._eye_approval
+            self._eye_approval = None
+            try:
+                event.reply.put_nowait(bool(allowed))
+            except queue.Full:
+                pass
+            self._approval_queue = None
+            return
         try:
             allowed = await self.push_screen_wait(
                 ApprovalModal(event.tool_name, event.preview)

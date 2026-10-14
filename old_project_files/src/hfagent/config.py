@@ -52,6 +52,8 @@ _ALIASES = {
     "hfagent_browser_timeout_ms": "HFAGENT_BROWSER_TIMEOUT_MS",
     "hfagent_browser_max_chars": "HFAGENT_BROWSER_MAX_CHARS",
     "hfagent_iheye": "HFAGENT_IHEYE",
+    "hfagent_iheye_track": "HFAGENT_IHEYE_TRACK",
+    "hfagent_iheye_summary": "HFAGENT_IHEYE_SUMMARY",
 }
 
 # key -> (value in the process before we wrote it, value we wrote)

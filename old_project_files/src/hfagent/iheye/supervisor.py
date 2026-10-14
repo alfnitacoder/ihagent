@@ -8,20 +8,48 @@ pid, so closing ihagent cannot leave the bubble behind.
 from __future__ import annotations
 
 import os
+import socket
 import subprocess
 import sys
 import tempfile
 import threading
+import time
 from dataclasses import dataclass
 from pathlib import Path
 
 from .appearance import STATES
 from .host import HostInfo
-from .protocol import connect_socket, encode
+from .panels import clean_chat_text, summarize_answer, trim_reply
+from .protocol import connect_socket, decode, encode
 
 INSTALL_HINT = "pip install 'hfagent[iheye]'"
 
 _ON = {"1", "true", "yes", "on"}
+_OFF = {"0", "false", "no", "off"}
+
+
+def flag_enabled(name: str, default: bool = True, environ: dict[str, str] | None = None) -> bool:
+    """Boolean env flag. Unset uses ``default``. Unknown text also uses ``default``."""
+    env = os.environ if environ is None else environ
+    raw = env.get(name)
+    if raw is None or str(raw).strip() == "":
+        return default
+    text = str(raw).strip().lower()
+    if text in _ON:
+        return True
+    if text in _OFF:
+        return False
+    return default
+
+
+def track_enabled(environ: dict[str, str] | None = None) -> bool:
+    """``HFAGENT_IHEYE_TRACK`` — pupil follows the pointer and keyboard activity."""
+    return flag_enabled("HFAGENT_IHEYE_TRACK", True, environ)
+
+
+def summary_enabled(environ: dict[str, str] | None = None) -> bool:
+    """``HFAGENT_IHEYE_SUMMARY`` — completion card under the eye."""
+    return flag_enabled("HFAGENT_IHEYE_SUMMARY", True, environ)
 
 
 def enabled_from_env(environ: dict[str, str] | None = None, platform_name: str | None = None) -> bool:
@@ -57,6 +85,8 @@ def helper_command(
     position_path: str,
     host: HostInfo,
     executable: str | None = None,
+    track: bool = True,
+    summary: bool = True,
 ) -> list[str]:
     return [
         executable or sys.executable,
@@ -80,6 +110,10 @@ def helper_command(
         ",".join(str(pid) for pid in host.ancestor_pids),
         "--tty",
         host.tty,
+        "--track",
+        "1" if track else "0",
+        "--summary",
+        "1" if summary else "0",
     ]
 
 
@@ -97,15 +131,23 @@ class EyeSupervisor:
         self.log_path = log_path or (Path.home() / ".hfagent" / "iheye.log")
         self.platform_name = sys.platform if platform_name is None else platform_name
         self.state = "idle"
+        self.track = track_enabled()
+        self.summary_enabled = summary_enabled()
         self.host: HostInfo | None = None
+        self.on_chat = None
+        self.on_approval = None
         self._proc: subprocess.Popen | None = None
         self._sock = None
         self._log_fh = None
         self._pending: dict | None = None
+        self._pending_msgs: dict[str, dict] = {}
         self._lock = threading.Lock()
         self._stopped = threading.Event()
         self._thread: threading.Thread | None = None
+        self._reader: threading.Thread | None = None
         self._socket_path = ""
+        self._reply_at = 0.0
+        self._hints: set[str] = set()
         self.status = EyeStatus(False, "stopped", "")
 
     @property
@@ -143,6 +185,8 @@ class EyeSupervisor:
             socket_path=socket_path,
             position_path=str(self.position_path),
             host=host,
+            track=self.track,
+            summary=self.summary_enabled,
         )
         self.log_path.parent.mkdir(parents=True, exist_ok=True)
         log_fh = open(self.log_path, "w", encoding="utf-8")
@@ -163,8 +207,14 @@ class EyeSupervisor:
         self.host = host
         self._stopped.clear()
         self._pending = {"state": self.state}
+        self._pending_msgs["options"] = {
+            "track": self.track,
+            "summary_enabled": self.summary_enabled,
+        }
         self._thread = threading.Thread(target=self._flush_loop, name="iheye-flush", daemon=True)
         self._thread.start()
+        self._reader = threading.Thread(target=self._reader_loop, name="iheye-read", daemon=True)
+        self._reader.start()
         # The helper exits immediately when AppKit cannot start. Catch that
         # without holding up ihagent for long.
         if not self._survived(0.2):
@@ -193,8 +243,12 @@ class EyeSupervisor:
                 proc.kill()
         thread = self._thread
         self._thread = None
+        reader = self._reader
+        self._reader = None
         if thread is not None and thread is not threading.current_thread():
             thread.join(timeout=1)
+        if reader is not None and reader is not threading.current_thread():
+            reader.join(timeout=1)
         fh = self._log_fh
         self._log_fh = None
         if fh is not None:
@@ -217,6 +271,60 @@ class EyeSupervisor:
             if self._sock is not None:
                 self._pending = None
 
+    def note_reply(self, text: str, final: bool = False) -> None:
+        """Push the latest assistant text. Throttled unless this is the final cut."""
+        if not self.running:
+            return
+        raw = text if isinstance(text, str) else str(text or "")
+        if len(raw) > 8000:
+            raw = raw[-8000:]
+        message = {"reply": trim_reply(raw), "final": bool(final)}
+        with self._lock:
+            now = time.monotonic()
+            if not final and now - self._reply_at < 0.08:
+                self._pending_msgs["reply"] = message
+                return
+            self._reply_at = now
+            self._enqueue_locked("reply", message)
+
+    def note_summary(self, text: str) -> None:
+        if not self.running or not self.summary_enabled:
+            return
+        body = summarize_answer(text)
+        if not body:
+            return
+        with self._lock:
+            self._enqueue_locked("summary", {"summary": body})
+
+    def note_approval(self, tool: str, preview: str) -> None:
+        if not self.running:
+            return
+        if not str(tool or "").strip():
+            message: dict = {"approval": None}
+        else:
+            message = {"approval": {"tool": str(tool), "preview": str(preview or "")}}
+        with self._lock:
+            self._enqueue_locked("approval", message)
+
+    def note_options(self, *, track: bool | None = None, summary: bool | None = None) -> None:
+        message: dict = {}
+        with self._lock:
+            if track is not None:
+                self.track = bool(track)
+                message["track"] = self.track
+            if summary is not None:
+                self.summary_enabled = bool(summary)
+                message["summary_enabled"] = self.summary_enabled
+            if not message or self._proc is None:
+                return
+            self._enqueue_locked("options", message)
+
+    def _enqueue_locked(self, key: str, message: dict) -> None:
+        self._pending_msgs[key] = message
+        self._send_locked(message)
+        if self._sock is not None:
+            self._pending_msgs.pop(key, None)
+
     def _survived(self, seconds: float) -> bool:
         proc = self._proc
         if proc is None:
@@ -238,13 +346,82 @@ class EyeSupervisor:
     def _flush_loop(self) -> None:
         while not self._stopped.wait(0.05):
             with self._lock:
-                if self._pending is None or self._proc is None or self._proc.poll() is not None:
+                proc = self._proc
+                if proc is None or proc.poll() is not None:
+                    continue
+                if self._pending is None and not self._pending_msgs:
+                    self._ensure_connected_locked()
                     continue
                 if not self._ensure_connected_locked():
                     continue
-                self._send_locked(self._pending)
-                if self._sock is not None:
-                    self._pending = None
+                if self._pending is not None:
+                    self._send_locked(self._pending)
+                    if self._sock is not None:
+                        self._pending = None
+                for key in list(self._pending_msgs):
+                    self._send_locked(self._pending_msgs[key])
+                    if self._sock is None:
+                        break
+                    self._pending_msgs.pop(key, None)
+
+    def _reader_loop(self) -> None:
+        buf = b""
+        while not self._stopped.is_set():
+            with self._lock:
+                sock = self._sock
+            if sock is None:
+                if self._stopped.wait(0.05):
+                    return
+                continue
+            try:
+                chunk = sock.recv(8192)
+            except socket.timeout:
+                continue
+            except OSError:
+                with self._lock:
+                    if self._sock is sock:
+                        self._close_sock_locked()
+                buf = b""
+                continue
+            if not chunk:
+                with self._lock:
+                    if self._sock is sock:
+                        self._close_sock_locked()
+                buf = b""
+                continue
+            buf += chunk
+            inbound: list[dict] = []
+            while b"\n" in buf:
+                raw, buf = buf.split(b"\n", 1)
+                msg = decode(raw)
+                if msg is not None:
+                    inbound.append(msg)
+            if len(buf) > 1_000_000:
+                buf = b""
+            for msg in inbound:
+                self._dispatch(msg)
+
+    def _dispatch(self, msg: dict) -> None:
+        cmd = msg.get("cmd")
+        try:
+            if cmd == "chat":
+                text = clean_chat_text(msg.get("text") or "")
+                handler = self.on_chat
+                if text and handler is not None:
+                    handler(text)
+                return
+            if cmd == "approve":
+                handler = self.on_approval
+                if handler is not None:
+                    handler(bool(msg.get("yes")))
+                return
+            if cmd == "hint":
+                text = str(msg.get("text") or "").strip()
+                if text and text not in self._hints:
+                    self._hints.add(text)
+                    print(text, file=sys.stderr)
+        except Exception:
+            return
 
     def _ensure_connected_locked(self) -> bool:
         if self._sock is not None:
@@ -253,6 +430,7 @@ class EyeSupervisor:
             return False
         try:
             self._sock = connect_socket(self._socket_path, timeout=0.05)
+            self._sock.settimeout(0.3)
         except OSError:
             self._sock = None
             return False

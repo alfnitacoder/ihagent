@@ -628,12 +628,18 @@ class Agent:
 
     def run(self, user_input: str) -> str:
         """Run one turn. iheye shows thinking, then a done pulse."""
-        from .iheye import publish
+        from .iheye import publish, publish_summary
 
         publish("thinking")
+        result = ""
         try:
-            return self._run(user_input)
+            result = self._run(user_input)
+            return result
         finally:
+            try:
+                publish_summary(result if isinstance(result, str) else "")
+            except Exception:
+                pass
             publish("done")
 
     def _run(self, user_input: str) -> str:
@@ -1178,11 +1184,20 @@ class Agent:
         prompt_tokens = 0
         completion_tokens = 0
 
+        def _push_reply(body: str, final: bool = False) -> None:
+            try:
+                from .iheye import publish_reply
+
+                publish_reply(body, final=final)
+            except Exception:
+                pass
+
         def add_answer(text: str) -> None:
             if not text:
                 return
             content_parts.append(text)
             self.ui.on_assistant_delta(text)
+            _push_reply("".join(content_parts))
 
         def add_thought(text: str) -> None:
             if not text:
@@ -1272,6 +1287,7 @@ class Agent:
                 ordered = valid
                 content = remaining
         self.ui.on_assistant_done(content)
+        _push_reply(content, final=True)
 
         # NOTE: never store None here - Ollama rejects assistant messages with
         # null content when they carry no tool_calls; empty string is safe.
@@ -1387,8 +1403,20 @@ class Agent:
         except Exception:
             preview = None
         try:
+            from .iheye import publish_approval
+
+            publish_approval(tool.name, preview or "")
+        except Exception:
+            pass
+        try:
             return self.ui.approve(tool.name, args, preview)
         finally:
+            try:
+                from .iheye import clear_approval
+
+                clear_approval()
+            except Exception:
+                pass
             publish("thinking")
 
     def _truncate(self, text: str) -> str:

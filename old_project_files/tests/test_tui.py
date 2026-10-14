@@ -378,6 +378,89 @@ def test_tui_collapses_duplicate_errors():
     asyncio.run(scenario())
 
 
+def test_tui_eye_chat_shows_up_like_a_typed_message():
+    agent = _agent(approval="auto")
+    agent.client = FakeClient([[Chunk(Delta(content="from the eye"))]])
+    app = HfAgentApp(agent)
+
+    async def scenario():
+        async with app.run_test(size=(120, 36)) as pilot:
+            from hfagent.iheye import get_supervisor
+
+            get_supervisor().on_chat("hello from the eye")
+            await _wait_until(
+                lambda: any(
+                    "hello from the eye" in text for text in _chat_contents(app, "user")
+                ),
+                pilot,
+            )
+            await _wait_until(lambda: not app._busy, pilot, timeout=8)
+            bodies = [widget.source for widget in app.query("Markdown.assistant")]
+            assert any("from the eye" in body for body in bodies)
+
+    asyncio.run(scenario())
+
+
+def test_tui_eye_note_while_busy_lands_in_the_inbox():
+    app = HfAgentApp(_agent())
+
+    async def scenario():
+        async with app.run_test(size=(100, 30)) as pilot:
+            from hfagent.iheye import get_supervisor
+
+            app._busy = True
+            get_supervisor().on_chat("note from the eye")
+            await app.workers.wait_for_complete()
+            await pilot.pause()
+            assert app.agent._inbox.get_nowait() == "note from the eye"
+            assert any("note from the eye" in text for text in _chat_contents(app, "user"))
+
+    asyncio.run(scenario())
+
+
+def test_tui_eye_approval_answers_the_prompt(tmp_path):
+    agent = _agent(approval="default")
+    agent.client = FakeClient(
+        [
+            [
+                Chunk(
+                    Delta(
+                        tool_calls=[
+                            ToolCallDelta(
+                                0,
+                                id="call_eye",
+                                name="run_command",
+                                arguments=json.dumps({"command": "echo hi"}),
+                            )
+                        ]
+                    )
+                )
+            ],
+            [Chunk(Delta(content="stopped"))],
+        ]
+    )
+    app = HfAgentApp(agent)
+
+    async def scenario():
+        async with app.run_test(size=(120, 36)) as pilot:
+            from hfagent.iheye import get_supervisor
+
+            composer = app.query_one("#composer", Composer)
+            composer.value = "run echo hi"
+            await composer.action_submit()
+            await _wait_until(lambda: isinstance(app.screen, ApprovalModal), pilot)
+            get_supervisor().on_approval(False)
+            await _wait_until(
+                lambda: any(
+                    "declined" in text.lower() for text in _chat_contents(app, "observation")
+                ),
+                pilot,
+            )
+            await _wait_until(lambda: not app._busy, pilot)
+
+    asyncio.run(scenario())
+
+
 def test_tui_dims_reasoning_as_thought():
     app = HfAgentApp(_agent())
 

@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import argparse
+import queue
+import select
 import sys
 
 from .agent import Agent, AgentUI
@@ -145,34 +147,85 @@ def make_agent(
 
 
 def repl(agent: Agent, ui: ConsoleUI) -> None:
+    chats: queue.Queue[str] = queue.Queue()
+    approvals: queue.Queue[bool] = queue.Queue()
+    busy = {"on": False}
+    ui.eye_approvals = approvals
+
+    def on_chat(text: str) -> None:
+        if busy["on"]:
+            ui.console.print(f"❯ {text}", markup=False, highlight=False)
+            agent.steer(text)
+            ui.on_status("noted — it will read this and continue")
+            return
+        chats.put(text)
+
+    def on_approval(yes: bool) -> None:
+        approvals.put(bool(yes))
+
+    from .iheye import bind_handlers, unbind_handlers
+
+    bind_handlers(on_chat, on_approval)
     ui.banner(agent.config.model, agent.registry.names())
+    try:
+        while True:
+            try:
+                user_input = _next_console_line(chats)
+            except (EOFError, KeyboardInterrupt):
+                print()
+                break
+            if not user_input:
+                continue
+            if user_input.startswith("/"):
+                result = dispatch_slash(agent, ui, user_input)
+                if result == "exit":
+                    break
+                continue
+            busy["on"] = True
+            try:
+                agent.run(user_input)
+                save_session(agent.messages, agent.config.model)
+            except Exception as exc:
+                from .agent import format_api_error
+
+                ui.on_error(
+                    format_api_error(
+                        exc,
+                        base_url=agent.config.base_url,
+                        model=agent.config.model,
+                        key_var=agent.config.api_key_var,
+                    )
+                )
+            finally:
+                busy["on"] = False
+    finally:
+        unbind_handlers()
+        ui.eye_approvals = None
+
+
+def _next_console_line(chats: queue.Queue[str]) -> str:
+    """Read the prompt, or a hover-chat line that arrived while we were waiting."""
+    sys.stdout.write("❯ ")
+    sys.stdout.flush()
     while True:
         try:
-            user_input = input("❯ ").strip()
-        except (EOFError, KeyboardInterrupt):
-            print()
-            break
-        if not user_input:
-            continue
-        if user_input.startswith("/"):
-            result = dispatch_slash(agent, ui, user_input)
-            if result == "exit":
-                break
-            continue
+            eyed = chats.get_nowait()
+        except queue.Empty:
+            eyed = ""
+        if eyed:
+            sys.stdout.write(eyed + "\n")
+            sys.stdout.flush()
+            return eyed.strip()
         try:
-            agent.run(user_input)
-            save_session(agent.messages, agent.config.model)
-        except Exception as exc:
-            from .agent import format_api_error
-
-            ui.on_error(
-                format_api_error(
-                    exc,
-                    base_url=agent.config.base_url,
-                    model=agent.config.model,
-                    key_var=agent.config.api_key_var,
-                )
-            )
+            ready, _, _ = select.select([sys.stdin], [], [], 0.2)
+        except (OSError, ValueError):
+            return input().strip()
+        if not ready:
+            continue
+        line = sys.stdin.readline()
+        if line == "":
+            raise EOFError
+        return line.strip()
 
 
 def handle_resume(agent: Agent, ui: AgentUI, name: str) -> None:

@@ -3,6 +3,10 @@
 from __future__ import annotations
 
 import json
+import queue
+import select
+import sys
+import time
 
 from rich.console import Console
 from rich.panel import Panel
@@ -108,9 +112,45 @@ class ConsoleUI(AgentUI):
                 border_style="yellow",
             )
         )
+        box = getattr(self, "eye_approvals", None)
+        if isinstance(box, queue.Queue):
+            answered = _approval_from_eye_or_stdin(box)
+            if answered is not None:
+                return answered
         try:
             answer = input("run this? [y/N] ").strip().lower()
         except (EOFError, KeyboardInterrupt):
             print()
             return False
         return answer in ("y", "yes")
+
+
+def _approval_from_eye_or_stdin(box: queue.Queue, timeout: float = 600.0) -> bool | None:
+    """y/N from the keyboard or from the iheye card. None falls back to input()."""
+    sys.stdout.write("run this? [y/N] ")
+    sys.stdout.flush()
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        try:
+            yes = bool(box.get_nowait())
+        except queue.Empty:
+            yes = None
+        if yes is not None:
+            sys.stdout.write(("y" if yes else "n") + "\n")
+            sys.stdout.flush()
+            return yes
+        try:
+            ready, _, _ = select.select([sys.stdin], [], [], 0.15)
+        except (OSError, ValueError):
+            return None
+        if not ready:
+            continue
+        try:
+            line = sys.stdin.readline()
+        except (EOFError, KeyboardInterrupt):
+            sys.stdout.write("\n")
+            return False
+        if line == "":
+            return False
+        return line.strip().lower() in ("y", "yes")
+    return False
