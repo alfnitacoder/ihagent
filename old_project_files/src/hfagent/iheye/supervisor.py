@@ -67,7 +67,7 @@ def look_enabled(environ: dict[str, str] | None = None) -> bool:
 
 
 def skin_name(environ: dict[str, str] | None = None) -> str:
-    """``HFAGENT_IHEYE_SKIN`` — ``robot`` or ``classic``. Default is robot."""
+    """``HFAGENT_IHEYE_SKIN`` — ``grok`` (default), ``classic``, or ``robot``."""
     return skin_from_env(environ)
 
 
@@ -107,7 +107,7 @@ def helper_command(
     track: bool = True,
     summary: bool = True,
     look: bool = True,
-    skin: str = "robot",
+    skin: str = "grok",
 ) -> list[str]:
     return [
         executable or sys.executable,

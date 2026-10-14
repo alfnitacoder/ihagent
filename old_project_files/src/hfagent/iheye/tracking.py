@@ -82,9 +82,9 @@ def tick_interval(
 ) -> float:
     """Seconds between redraws. Idle eyes tick slowly; motion and work do not.
 
-    The classic bubble stays at 8fps when nothing is happening. The robot skin
-    idles near 15fps, which is enough for a blink and a slow gaze poll while
-    the ring spin and core breath run as layer animations.
+    The classic bubble stays at 8fps when nothing is happening. The face
+    idles near 24fps so a blink is a few frames, not a skipped one. The
+    robot skin idles near 15fps.
     """
     if not visible:
         return 0.5
@@ -97,6 +97,8 @@ def tick_interval(
             return 1.0 / 30.0
     if tracking and (pointer_near_eye or mouse_moved or typing):
         return 1.0 / 30.0
+    if skin in {"grok", "face"}:
+        return 1.0 / 24.0
     if skin == "robot":
         return 1.0 / 15.0
     return 1.0 / 8.0
