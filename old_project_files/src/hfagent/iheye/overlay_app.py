@@ -1,4 +1,4 @@
-"""macOS overlay: a borderless eye, a hover chat card, and completion notices.
+"""macOS overlay: a borderless face, a hover chat card, and completion notices.
 
 AppKit is imported inside ``run_overlay`` so this module can be imported on
 Linux and in tests. The helper process is the only caller.
@@ -21,6 +21,7 @@ import time
 import traceback
 
 from .appearance import eye_geometry
+from .face import describe_face, face_pose, point_in_face
 from .focus import FrontApp, activation_plan, eye_should_show, same_host
 from .host import HostInfo, front_tty_script, run_osascript
 from .lifecycle import helper_should_exit, pid_alive, watch_parent_exit_async
@@ -49,7 +50,6 @@ from .robot import (
     ASSETS,
     CLASSIC_H,
     CLASSIC_W,
-    METAL_LID,
     assets_ready,
     describe_frame,
     load_layout,
@@ -57,7 +57,6 @@ from .robot import (
     panel_size,
     point_in_frame,
     resolve_skin,
-    ring_specs,
     robot_pose,
 )
 from .supervisor import INSTALL_HINT
@@ -87,12 +86,9 @@ def run_overlay(args, host: HostInfo) -> int:
             NSApplication,
             NSApplicationActivateIgnoringOtherApps,
             NSApplicationActivationPolicyAccessory,
-            NSAffineTransform,
             NSBackingStoreBuffered,
             NSBezierPath,
-            NSBitmapImageRep,
             NSButton,
-            NSCalibratedRGBColorSpace,
             NSColor,
             NSCompositingOperationSourceOver,
             NSEvent,
@@ -171,15 +167,11 @@ def run_overlay(args, host: HostInfo) -> int:
             self.onClick = None
             self.onDrag = None
             self.onDragEnd = None
-            self._skin = "classic"
+            self._skin = "grok"
+            self._speaking = False
             self._layout = None
-            self._layer_mode = False
-            self._ring_cache = {}
-            self._core_contents = None
             self._frame_image = None
             self._iris_image = None
-            self._anim_state = None
-            self._layers = None
             return self
 
         def isOpaque(self):
@@ -190,42 +182,42 @@ def run_overlay(args, host: HostInfo) -> int:
 
         def setEyeState_(self, state):
             self._state = str(state)
-            if self._skin == "robot":
-                self._robot_refresh(True)
-            else:
-                self.setNeedsDisplay_(True)
+            self.setNeedsDisplay_(True)
+
+        @objc.python_method
+        def set_speaking(self, speaking):
+            flag = bool(speaking)
+            if flag == self._speaking:
+                return
+            self._speaking = flag
+            self.setNeedsDisplay_(True)
 
         @objc.python_method
         def set_motion(self, phase, pupil, blink_extra):
             self._phase = float(phase)
             self._pupil = None if pupil is None else (float(pupil[0]), float(pupil[1]))
             self._blink_extra = float(blink_extra or 0.0)
-            if self._skin == "robot":
-                self._robot_refresh(False)
-            else:
-                self.setNeedsDisplay_(True)
+            self.setNeedsDisplay_(True)
 
         def hitTest_(self, point):
+            local = self.convertPoint_fromView_(point, self.superview())
+            bounds = self.bounds()
+            x, y = float(local.x), float(local.y)
+            width, height = float(bounds.size.width), float(bounds.size.height)
             if self._skin == "robot" and self._layout:
-                local = self.convertPoint_fromView_(point, self.superview())
-                bounds = self.bounds()
                 outline = self._layout.get("outline") or []
-                if outline and not point_in_frame(
-                    float(local.x),
-                    float(local.y),
-                    float(bounds.size.width),
-                    float(bounds.size.height),
-                    outline,
-                ):
+                if outline and not point_in_frame(x, y, width, height, outline):
                     return None
+            elif self._skin == "grok" and not point_in_face(x, y, width, height):
+                return None
             return objc.super(EyeView, self).hitTest_(point)
 
         @objc.python_method
         def use_skin(self, skin):
             self._skin = normalize_skin(skin)
-            self._layer_mode = False
-            self._layers = None
+            self._speaking = False
             if self._skin != "robot":
+                self._layout = None
                 self.setNeedsDisplay_(True)
                 return
             self._layout = load_layout()
@@ -233,14 +225,9 @@ def run_overlay(args, host: HostInfo) -> int:
             if self._frame_image is None or self._iris_image is None:
                 print("iheye: robot art missing; using classic", file=sys.stderr)
                 self._skin = "classic"
-                self.setNeedsDisplay_(True)
-                return
-            # CALayer hosting aborts the helper on some macOS/PyObjC builds.
-            # Paint the robot skin in drawRect_ instead; motion still works.
-            self._layer_mode = False
-            self._layers = None
+            # Every skin paints in drawRect_. Hosting a layer tree crashed the
+            # robot eye on launch (SIGTRAP), so this view never does that.
             self.setNeedsDisplay_(True)
-
 
         @objc.python_method
         def _load_art(self):
@@ -264,18 +251,6 @@ def run_overlay(args, host: HostInfo) -> int:
                 blink_extra=self._blink_extra,
                 layout=self._layout,
             )
-
-        @objc.python_method
-        def _robot_refresh(self, state_changed):
-            if self._layout is None:
-                return
-            pose = self._current_pose()
-            if self._layer_mode and self._layers is not None:
-                changed = state_changed or pose.state != self._anim_state
-                self._sync_layers(pose, changed)
-                self._anim_state = pose.state
-                return
-            self.setNeedsDisplay_(True)
 
         @objc.python_method
         def _iris_rect(self):
@@ -303,261 +278,8 @@ def run_overlay(args, host: HostInfo) -> int:
             return cx, cy, rx, ry
 
         @objc.python_method
-        def _install_layers(self):
-            from Quartz import (
-                CABasicAnimation,
-                CALayer,
-                CAShapeLayer,
-                CGColorCreateGenericRGB,
-                CGPathAddEllipseInRect,
-                CGPathCreateMutable,
-                CGRectMake,
-            )
-
-            self._quartz = {
-                "CABasicAnimation": CABasicAnimation,
-                "CGColorCreateGenericRGB": CGColorCreateGenericRGB,
-            }
-            bounds = self.bounds()
-            width = float(bounds.size.width)
-            height = float(bounds.size.height)
-            root = CALayer.layer()
-            root.setFrame_(NSMakeRect(0, 0, width, height))
-            root.setContentsScale_(2.0)
-            frame_layer = CALayer.layer()
-            frame_layer.setFrame_(NSMakeRect(0, 0, width, height))
-            frame_layer.setContentsScale_(2.0)
-            frame_cg = self._cgimage(self._frame_image)
-            iris_cg = self._cgimage(self._iris_image)
-            if frame_cg is None or iris_cg is None:
-                raise RuntimeError("robot art could not be decoded")
-            frame_layer.setContents_(frame_cg)
-            root.addSublayer_(frame_layer)
-
-            socket = CALayer.layer()
-            socket.setFrame_(NSMakeRect(0, 0, width, height))
-            cx, cy, rx, ry = self._socket_rect()
-            mask = CAShapeLayer.layer()
-            path = CGPathCreateMutable()
-            CGPathAddEllipseInRect(path, None, CGRectMake(cx - rx, cy - ry, rx * 2, ry * 2))
-            mask.setPath_(path)
-            mask.setFrame_(NSMakeRect(0, 0, width, height))
-            socket.setMask_(mask)
-
-            ix, iy, iw, ih = self._iris_rect()
-            holder = CALayer.layer()
-            holder.setBounds_(NSMakeRect(0, 0, max(iw, ih), max(iw, ih)))
-            holder.setPosition_((ix + iw / 2.0, iy + ih / 2.0))
-            holder.setContentsScale_(2.0)
-
-            glow = CALayer.layer()
-            glow.setBounds_(NSMakeRect(0, 0, iw, ih))
-            glow.setPosition_((max(iw, ih) / 2.0, max(iw, ih) / 2.0))
-            glow.setContentsScale_(2.0)
-            glow.setContents_(iris_cg)
-            holder.addSublayer_(glow)
-
-            ring_layers = []
-            ring_side = max(8.0, min(iw, ih))
-            holder_side = max(iw, ih)
-            for index, spec in enumerate(ring_specs("idle")):
-                ring = CALayer.layer()
-                ring.setBounds_(NSMakeRect(0, 0, ring_side, ring_side))
-                ring.setPosition_((holder_side / 2.0, holder_side / 2.0))
-                ring.setContentsScale_(2.0)
-                holder.addSublayer_(ring)
-                ring_layers.append((ring, index, spec))
-
-            core = CALayer.layer()
-            core_side = max(8.0, min(iw, ih) * 0.42)
-            core.setBounds_(NSMakeRect(0, 0, core_side, core_side))
-            core.setPosition_((max(iw, ih) / 2.0, max(iw, ih) / 2.0))
-            core.setContentsScale_(2.0)
-            core.setContents_(self._core_contents_image(core_side))
-            holder.addSublayer_(core)
-
-            tint = CALayer.layer()
-            tint.setBounds_(NSMakeRect(0, 0, iw, ih))
-            tint.setPosition_((max(iw, ih) / 2.0, max(iw, ih) / 2.0))
-            tint.setCornerRadius_(min(iw, ih) / 2.0)
-            holder.addSublayer_(tint)
-            socket.addSublayer_(holder)
-
-            lid_top = CALayer.layer()
-            lid_bottom = CALayer.layer()
-            color = CGColorCreateGenericRGB(METAL_LID[0], METAL_LID[1], METAL_LID[2], 1.0)
-            for lid in (lid_top, lid_bottom):
-                lid.setBackgroundColor_(color)
-                lid.setOpacity_(0.0)
-                socket.addSublayer_(lid)
-            root.addSublayer_(socket)
-
-            self.setLayer_(root)
-            self.setWantsLayer_(True)
-            # NSViewLayerContentsRedrawNever — the layers animate; drawRect stays idle.
-            self.setLayerContentsRedrawPolicy_(0)
-            self._layers = {
-                "holder": holder,
-                "rings": ring_layers,
-                "core": core,
-                "tint": tint,
-                "lid_top": lid_top,
-                "lid_bottom": lid_bottom,
-                "home": (ix + iw / 2.0, iy + ih / 2.0),
-                "socket": (cx, cy, rx, ry),
-            }
-            self._layer_mode = True
-
-        @objc.python_method
-        def _cgimage(self, image):
-            if image is None:
-                return None
-            return image.CGImageForProposedRect_context_hints_(None, None, None)
-
-        @objc.python_method
-        def _core_contents_image(self, side):
-            if self._core_contents is not None:
-                return self._core_contents
-            pixels = max(16, int(side * 2))
-            rep = NSBitmapImageRep.alloc().initWithBitmapDataPlanes_pixelsWide_pixelsHigh_bitsPerSample_samplesPerPixel_hasAlpha_isPlanar_colorSpaceName_bytesPerRow_bitsPerPixel_(
-                None, pixels, pixels, 8, 4, True, False, NSCalibratedRGBColorSpace, 0, 0
-            )
-            ctx = NSGraphicsContext.graphicsContextWithBitmapImageRep_(rep)
-            NSGraphicsContext.saveGraphicsState()
-            NSGraphicsContext.setCurrentContext_(ctx)
-            transform = NSAffineTransform.transform()
-            transform.scaleBy_(2.0)
-            transform.concat()
-            center = side / 2.0
-            for radius, alpha in ((side * 0.48, 0.18), (side * 0.28, 0.45), (side * 0.12, 0.95)):
-                NSColor.colorWithCalibratedWhite_alpha_(1.0, alpha).set()
-                NSBezierPath.bezierPathWithOvalInRect_(
-                    NSMakeRect(center - radius, center - radius, radius * 2, radius * 2)
-                ).fill()
-            NSGraphicsContext.restoreGraphicsState()
-            image = NSImage.alloc().initWithSize_((side, side))
-            image.addRepresentation_(rep)
-            self._core_contents = image.CGImageForProposedRect_context_hints_(None, None, None)
-            return self._core_contents
-
-        @objc.python_method
-        def _ring_contents(self, state, index, spec, side):
-            key = (state, index)
-            cached = self._ring_cache.get(key)
-            if cached is not None:
-                return cached
-            pixels = max(16, int(side * 2))
-            rep = NSBitmapImageRep.alloc().initWithBitmapDataPlanes_pixelsWide_pixelsHigh_bitsPerSample_samplesPerPixel_hasAlpha_isPlanar_colorSpaceName_bytesPerRow_bitsPerPixel_(
-                None, pixels, pixels, 8, 4, True, False, NSCalibratedRGBColorSpace, 0, 0
-            )
-            ctx = NSGraphicsContext.graphicsContextWithBitmapImageRep_(rep)
-            NSGraphicsContext.saveGraphicsState()
-            NSGraphicsContext.setCurrentContext_(ctx)
-            transform = NSAffineTransform.transform()
-            transform.scaleBy_(2.0)
-            transform.concat()
-            NSColor.clearColor().set()
-            NSBezierPath.fillRect_(NSMakeRect(0, 0, side, side))
-            rgba = spec.rgba
-            NSColor.colorWithCalibratedRed_green_blue_alpha_(rgba[0], rgba[1], rgba[2], rgba[3]).set()
-            radius = side * 0.5 * spec.radius
-            cx = cy = side / 2.0
-            span = math.tau / spec.dashes
-            path = NSBezierPath.alloc().init()
-            path.setLineWidth_(spec.width)
-            path.setLineCapStyle_(1)
-            steps = 3
-            for dash in range(spec.dashes):
-                a0 = dash * span
-                a1 = a0 + span * spec.duty
-                for step in range(steps):
-                    t0 = a0 + (a1 - a0) * step / steps
-                    t1 = a0 + (a1 - a0) * (step + 1) / steps
-                    p0 = NSMakePoint(cx + math.cos(t0) * radius, cy + math.sin(t0) * radius)
-                    p1 = NSMakePoint(cx + math.cos(t1) * radius, cy + math.sin(t1) * radius)
-                    if step == 0:
-                        path.moveToPoint_(p0)
-                    path.lineToPoint_(p1)
-            path.stroke()
-            NSGraphicsContext.restoreGraphicsState()
-            image = NSImage.alloc().initWithSize_((side, side))
-            image.addRepresentation_(rep)
-            contents = image.CGImageForProposedRect_context_hints_(None, None, None)
-            self._ring_cache[key] = contents
-            return contents
-
-        @objc.python_method
-        def _sync_layers(self, pose, state_changed):
-            layers = self._layers
-            quartz = self._quartz or {}
-            home_x, home_y = layers["home"]
-            layers["holder"].setPosition_((home_x + pose.iris_dx, home_y + pose.iris_dy))
-            self._place_lids(pose)
-            if not state_changed:
-                return
-            color = quartz["CGColorCreateGenericRGB"]
-            tint = layers["tint"]
-            rgb = pose.tint_rgb
-            tint.setBackgroundColor_(color(rgb[0], rgb[1], rgb[2], 1.0))
-            tint.setOpacity_(pose.tint_alpha)
-            layers["core"].setOpacity_(min(1.0, pose.breath * pose.glow))
-            self._animate_core(pose)
-            ix, iy, iw, ih = self._iris_rect()
-            ring_side = max(8.0, min(iw, ih))
-            for ring, index, _old in layers["rings"]:
-                spec = ring_specs(pose.state)[index]
-                contents = self._ring_contents(pose.state, index, spec, ring_side)
-                if contents is not None:
-                    ring.setContents_(contents)
-                self._animate_spin(ring, pose.spin_period / max(0.2, abs(spec.spin)), spec.spin < 0)
-
-        @objc.python_method
-        def _animate_spin(self, layer, period, reverse):
-            quartz = self._quartz or {}
-            animation = quartz["CABasicAnimation"].animationWithKeyPath_("transform.rotation.z")
-            turn = math.tau
-            animation.setFromValue_(0.0 if not reverse else turn)
-            animation.setToValue_(-turn if reverse else turn)
-            animation.setDuration_(max(0.4, float(period)))
-            animation.setRepeatCount_(1e6)
-            animation.setRemovedOnCompletion_(False)
-            layer.addAnimation_forKey_(animation, "spin")
-
-        @objc.python_method
-        def _animate_core(self, pose):
-            quartz = self._quartz or {}
-            animation = quartz["CABasicAnimation"].animationWithKeyPath_("opacity")
-            if pose.state == "thinking":
-                animation.setFromValue_(0.72)
-                animation.setToValue_(1.0)
-                animation.setDuration_(0.7)
-            else:
-                animation.setFromValue_(0.45)
-                animation.setToValue_(0.95)
-                animation.setDuration_(1.6)
-            animation.setAutoreverses_(True)
-            animation.setRepeatCount_(1e6)
-            animation.setRemovedOnCompletion_(False)
-            self._layers["core"].addAnimation_forKey_(animation, "breath")
-
-        @objc.python_method
-        def _place_lids(self, pose):
-            cx, cy, rx, ry = self._layers["socket"]
-            cover = (ry * 2.0) * max(0.0, min(1.0, pose.blink)) * 0.5
-            top = self._layers["lid_top"]
-            bottom = self._layers["lid_bottom"]
-            if cover < 0.4:
-                top.setOpacity_(0.0)
-                bottom.setOpacity_(0.0)
-                return
-            top.setOpacity_(1.0)
-            bottom.setOpacity_(1.0)
-            top.setFrame_(NSMakeRect(cx - rx, cy + ry - cover, rx * 2.0, cover))
-            bottom.setFrame_(NSMakeRect(cx - rx, cy - ry, rx * 2.0, cover))
-
-        @objc.python_method
         def _paint_robot(self):
-            """Vector fallback when layer hosting is unavailable. Same ops as describe_frame."""
+            """Robot eye in drawRect_. Same ops as describe_frame."""
             pose = self._current_pose()
             bounds = self.bounds()
             NSColor.clearColor().set()
@@ -636,10 +358,98 @@ def run_overlay(args, host: HostInfo) -> int:
                     path.lineToPoint_(p1)
             path.stroke()
 
+        @objc.python_method
+        def _paint_face(self):
+            """Grok-style face in drawRect_. Same ops as describe_face."""
+            pose = face_pose(
+                self._state,
+                self._phase,
+                pupil=self._pupil,
+                blink_extra=self._blink_extra,
+                speaking=self._speaking,
+            )
+            bounds = self.bounds()
+            NSColor.clearColor().set()
+            NSBezierPath.fillRect_(bounds)
+            for op in describe_face(pose, float(bounds.size.width), float(bounds.size.height)):
+                self._paint_face_op(op)
+
+        @objc.python_method
+        def _paint_face_op(self, op):
+            kind = op.get("op")
+            rgb = op.get("rgb") or (1.0, 1.0, 1.0)
+            alpha = float(op.get("alpha", 1.0))
+            color = NSColor.colorWithCalibratedRed_green_blue_alpha_(rgb[0], rgb[1], rgb[2], alpha)
+            ctx = NSGraphicsContext.currentContext()
+            clipped = kind in {"sheen", "shade"} and ctx is not None
+            if clipped:
+                ctx.saveGraphicsState()
+                clip = op.get("clip") or (op["cx"], op["cy"])
+                clip_r = float(op.get("clip_r") or 1.0)
+                NSBezierPath.bezierPathWithOvalInRect_(
+                    NSMakeRect(clip[0] - clip_r, clip[1] - clip_r, clip_r * 2.0, clip_r * 2.0)
+                ).addClip()
+            color.set()
+            if kind == "disc":
+                r = float(op["r"])
+                NSBezierPath.bezierPathWithOvalInRect_(
+                    NSMakeRect(op["cx"] - r, op["cy"] - r, r * 2.0, r * 2.0)
+                ).fill()
+            elif kind == "rim":
+                r = float(op["r"])
+                path = NSBezierPath.bezierPathWithOvalInRect_(
+                    NSMakeRect(op["cx"] - r, op["cy"] - r, r * 2.0, r * 2.0)
+                )
+                path.setLineWidth_(float(op.get("width") or 2.0))
+                path.stroke()
+            elif kind == "eye":
+                rx, ry = float(op["rx"]), float(op["ry"])
+                radius = min(rx, ry)
+                NSBezierPath.bezierPathWithRoundedRect_xRadius_yRadius_(
+                    NSMakeRect(op["cx"] - rx, op["cy"] - ry, rx * 2.0, ry * 2.0),
+                    radius,
+                    radius,
+                ).fill()
+            elif kind in {"pupil", "catch", "sheen", "shade", "mouth_blob"}:
+                if kind in {"pupil", "catch"}:
+                    r = float(op["r"])
+                    rect = NSMakeRect(op["cx"] - r, op["cy"] - r, r * 2.0, r * 2.0)
+                else:
+                    rx, ry = float(op["rx"]), float(op["ry"])
+                    rect = NSMakeRect(op["cx"] - rx, op["cy"] - ry, rx * 2.0, ry * 2.0)
+                NSBezierPath.bezierPathWithOvalInRect_(rect).fill()
+            elif kind == "mouth_arc":
+                path = NSBezierPath.alloc().init()
+                path.setLineWidth_(float(op.get("width") or 2.4))
+                path.setLineCapStyle_(1)
+                path.appendBezierPathWithArcWithCenter_radius_startAngle_endAngle_clockwise_(
+                    NSMakePoint(op["cx"], op["cy"]),
+                    float(op["radius"]),
+                    float(op["start"]),
+                    float(op["end"]),
+                    False,
+                )
+                path.stroke()
+            elif kind == "mouth_line":
+                path = NSBezierPath.alloc().init()
+                path.setLineWidth_(float(op.get("width") or 2.4))
+                path.setLineCapStyle_(1)
+                path.moveToPoint_(NSMakePoint(op["x0"], op["y0"]))
+                path.curveToPoint_controlPoint1_controlPoint2_(
+                    NSMakePoint(op["x2"], op["y2"]),
+                    NSMakePoint(op["x1"], op["y1"]),
+                    NSMakePoint(op["x1"], op["y1"]),
+                )
+                path.stroke()
+            if clipped:
+                ctx.restoreGraphicsState()
+
         def drawRect_(self, _dirty):
             if self._skin == "robot":
-                if not self._layer_mode:
-                    self._paint_robot()
+                self._paint_robot()
+                return
+            if self._skin == "grok":
+                self._paint_face()
                 return
             bounds = self.bounds()
             NSColor.clearColor().set()
@@ -887,6 +697,9 @@ def run_overlay(args, host: HostInfo) -> int:
             if "reply" in msg:
                 self.reply_text = str(msg.get("reply") or "")
                 changed = True
+            if self.view is not None and ("state" in msg or "reply" in msg):
+                talking = self._state == "thinking" and bool(str(self.reply_text or "").strip())
+                self.view.set_speaking(talking)
             if "summary" in msg:
                 text = str(msg.get("summary") or "").strip()
                 visible = self.panel is not None and bool(self.panel.isVisible())
@@ -935,10 +748,10 @@ def run_overlay(args, host: HostInfo) -> int:
             eye_frame = self.panel.frame() if self.panel is not None else None
             if eye_frame is not None:
                 cx = float(eye_frame.origin.x) + self.panel_w / 2.0
-                if self.skin == "robot":
-                    cy = float(eye_frame.origin.y) + self.panel_h / 2.0
-                else:
+                if self.skin == "classic":
                     cy = float(eye_frame.origin.y) + 58.0
+                else:
+                    cy = float(eye_frame.origin.y) + self.panel_h / 2.0
             else:
                 cx, cy = mx, my
             near = pointer_near(mx, my, cx, cy)

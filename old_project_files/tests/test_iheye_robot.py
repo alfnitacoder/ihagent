@@ -96,15 +96,18 @@ def _synthetic_rgb() -> tuple[bytes, int, int]:
     return bytes(buf), width, height
 
 
-def test_skin_defaults_to_robot_and_classic_is_explicit():
-    assert skin_from_env({}) == "robot"
+def test_skin_defaults_to_grok_and_classic_is_explicit():
+    assert skin_from_env({}) == "grok"
+    assert skin_from_env({"HFAGENT_IHEYE_SKIN": "  FACE "}) == "grok"
     assert skin_from_env({"HFAGENT_IHEYE_SKIN": "  CLASSIC "}) == "classic"
     assert skin_from_env({"HFAGENT_IHEYE_SKIN": "robot"}) == "robot"
-    assert normalize_skin("nope") == "robot"
-    assert normalize_skin("") == "robot"
+    assert normalize_skin("nope") == "grok"
+    assert normalize_skin("") == "grok"
     assert resolve_skin("classic", {"HFAGENT_IHEYE_SKIN": "robot"}) == "classic"
     assert resolve_skin("  ", {"HFAGENT_IHEYE_SKIN": "classic"}) == "classic"
+    assert resolve_skin("face", {}) == "grok"
     assert panel_size("classic") == (88.0, 100.0)
+    assert panel_size("grok")[0] == panel_size("grok")[1]
     width, height = panel_size("robot")
     assert 120 <= width <= 160
     assert height > 40
@@ -238,8 +241,9 @@ def test_robot_idle_ticks_faster_than_classic_but_stays_cheap():
         typing=False,
     )
     assert tick_interval(**common) == pytest.approx(1 / 8)
+    assert tick_interval(**common, skin="grok") == pytest.approx(1 / 24)
     assert tick_interval(**common, skin="robot") == pytest.approx(1 / 15)
-    assert tick_interval(**{**common, "state": "thinking"}, skin="robot") == pytest.approx(1 / 30)
+    assert tick_interval(**{**common, "state": "thinking"}, skin="grok") == pytest.approx(1 / 30)
 
 
 def test_helper_command_passes_skin_and_overlay_keeps_python_methods():
@@ -272,17 +276,21 @@ def test_helper_command_passes_skin_and_overlay_keeps_python_methods():
         position_path="/tmp/pos.json",
         host=host,
     )
-    assert default[default.index("--skin") + 1] == "robot"
+    assert default[default.index("--skin") + 1] == "grok"
 
     overlay = Path(__file__).resolve().parents[1] / "src" / "hfagent" / "iheye" / "overlay_app.py"
     source = overlay.read_text(encoding="utf-8")
     assert "def set_motion" in source
     assert "def setEyeState_" in source
+    assert "def set_speaking" in source
     assert "@objc.python_method" in source
-    assert "_ring_cache" in source
     assert "describe_frame" in source
-    assert "setLayerContentsRedrawPolicy_" in source
+    assert "describe_face" in source
+    assert "def _paint_face" in source
     assert "use_skin" in source
+    assert "setWantsLayer_" not in source
+    assert "setLayerContentsRedrawPolicy_" not in source
+    assert "CALayer" not in source
     assert "charactersIgnoringModifiers" not in source
 
 
@@ -291,7 +299,7 @@ def test_config_report_names_the_skin(monkeypatch):
 
     monkeypatch.delenv("HFAGENT_IHEYE_SKIN", raising=False)
     report = format_config_report(Config.load())
-    assert "iheye_skin=robot" in report
+    assert "iheye_skin=grok" in report
     monkeypatch.setenv("HFAGENT_IHEYE_SKIN", "classic")
     report = format_config_report(Config.load())
     assert "iheye_skin=classic" in report

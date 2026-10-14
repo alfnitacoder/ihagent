@@ -21,7 +21,8 @@ from .appearance import blink_amount, normalize_state, pulse_alpha, pupil_offset
 from .tracking import PHASE_PER_SEC
 
 ASSETS = Path(__file__).resolve().parent / "assets"
-SKINS = ("robot", "classic")
+SKINS = ("grok", "classic", "robot")
+DEFAULT_SKIN = "grok"
 
 # Classic bubble, in points. The robot window size comes from layout.json.
 CLASSIC_W = 88.0
@@ -81,20 +82,25 @@ class RobotPose:
 
 
 def normalize_skin(value: object) -> str:
+    """``grok`` (alias ``face``) is the default. ``classic`` and ``robot`` stay optional."""
     text = str(value or "").strip().lower()
+    if text in {"grok", "face"}:
+        return "grok"
     if text == "classic":
         return "classic"
-    return "robot"
+    if text == "robot":
+        return "robot"
+    return DEFAULT_SKIN
 
 
 def skin_from_env(environ: dict[str, str] | None = None) -> str:
-    """``HFAGENT_IHEYE_SKIN`` — ``robot`` (default) or ``classic``."""
+    """``HFAGENT_IHEYE_SKIN`` — ``grok`` (default), ``face``, ``classic``, or ``robot``."""
     env = os.environ if environ is None else environ
     return normalize_skin(env.get("HFAGENT_IHEYE_SKIN"))
 
 
 def resolve_skin(explicit: object = None, environ: dict[str, str] | None = None) -> str:
-    """A non-empty ``--skin`` wins. Otherwise the env var, otherwise robot."""
+    """A non-empty ``--skin`` wins. Otherwise the env var, otherwise grok."""
     if explicit is not None and str(explicit).strip():
         return normalize_skin(explicit)
     return skin_from_env(environ)
@@ -145,11 +151,16 @@ def _default_layout() -> dict:
 
 
 def panel_size(skin: str) -> tuple[float, float]:
-    if normalize_skin(skin) != "robot":
+    name = normalize_skin(skin)
+    if name == "robot":
+        layout = load_layout()
+        size = layout.get("logical_size") or [150.0, 90.0]
+        return float(size[0]), float(size[1])
+    if name == "classic":
         return CLASSIC_W, CLASSIC_H
-    layout = load_layout()
-    size = layout.get("logical_size") or [150.0, 90.0]
-    return float(size[0]), float(size[1])
+    from .face import FACE_H, FACE_W
+
+    return FACE_W, FACE_H
 
 
 def _mix(a: tuple[float, ...], b: tuple[float, ...], t: float) -> tuple[float, float, float]:
