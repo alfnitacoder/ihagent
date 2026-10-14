@@ -37,6 +37,7 @@ HELP = """\
 /approval [mode]  switch approval mode: auto or default
 /memory           show what the agent remembers long-term
 /skills           list coding skills (builtin + ~/.hfagent/skills)
+/browser [action] status of the ihagent Chrome, or close it
 /forget           wipe long-term memory
 /cloud            use Ollama Cloud (saved for the next launch)
 /local            use Ollama on this PC (saved for the next launch)
@@ -129,6 +130,12 @@ def dispatch_slash(agent: Agent, ui: AgentUI, line: str) -> SlashResult:
 
     if command == "/tools":
         ui.on_status(", ".join(agent.registry.names()))
+        return "handled"
+
+    if command == "/browser":
+        from .browser import browser_command
+
+        ui.on_system(browser_command(arg))
         return "handled"
 
     if command == "/clear":

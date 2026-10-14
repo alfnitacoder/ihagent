@@ -81,6 +81,7 @@ Click a session in the sidebar to resume it.
 | `/primary` | switch back after an automatic fallback |
 | `/sessions` | list saved sessions |
 | `/resume [name]` | load a saved session |
+| `/browser` | ihagent Chrome status, or `/browser close` |
 | `/clear` | reset the conversation |
 | `/exit` | quit |
 
@@ -95,9 +96,70 @@ Click a session in the sidebar to resume it.
 | `edit_file` | replace exact text in a file | **y/N + diff** |
 | `run_command` | shell command (build, tests, git) | **y/N** |
 | `ssh_run` | one command on an SSH host (aliases from ~/.ssh/config) | **y/N** |
+| `web_search` | DuckDuckGo search in the ihagent Chrome | — |
+| `browser_open` | open a URL (optional new tab) | executable file: **y/N** |
+| `browser_tabs` | list tabs | — |
+| `browser_switch_tab` | switch tab by index | — |
+| `browser_new_tab` | open a tab | executable file: **y/N** |
+| `browser_close_tab` | close a tab | — |
+| `browser_read` | compact text or accessibility snapshot with `[eN]` refs | — |
+| `browser_click` | click a ref or CSS selector | form submit, purchase, executable: **y/N** |
+| `browser_type` | fill a form field | `submit=true`: **y/N** |
+| `browser_select` | choose a `<select>` option | — |
+| `browser_press` | press a key | Enter that submits a form: **y/N** |
+| `browser_scroll` | scroll the page or a ref into view | — |
+| `browser_screenshot` | save a PNG and return its path | — |
+| `browser_wait` | wait for time, text, or a selector | — |
+| `browser_download` | save a file and report the path | executable: **y/N** |
 
 Approval prompts protect against unintended writes and command execution.
 Skip them at your own risk with `--yolo` (or `HFAGENT_YOLO=1`).
+
+## Browser
+
+Browser tools drive a **dedicated Chrome profile** at `~/.hfagent/chrome-profile`.
+That is not your everyday Chrome profile, so ihagent never reads or writes your
+personal cookies. Logins you complete in this window are saved in the ihagent
+profile and are still there next launch. The window stays closed until the
+first browser tool runs, and it closes when you quit ihagent or run
+`/browser close`.
+
+On macOS the driver prefers the installed Google Chrome (`channel=chrome`,
+then the Chrome executable path) and falls back to Playwright's bundled
+Chromium. The window is headed unless you opt into headless.
+
+```bash
+pip install 'hfagent[browser]' && playwright install chrome
+ihagent
+```
+
+Then ask it to search or open a page. `/browser` shows whether Chrome is
+running, the profile path, and the open tabs. Page text and snapshots are
+truncated (default 6000 characters) so a 64K context is not filled by one
+page. Instructions inside a web page are not treated as your instructions.
+
+Form submits, purchases, and downloads of executables (`.dmg`, `.pkg`,
+`.exe`, and similar) use the same y/N approval prompt as `run_command`.
+Other files download without a prompt. Downloads and screenshots are saved
+under `~/Downloads/ihagent` unless you change the directory. The tool reply
+includes the saved path.
+
+If Playwright is not installed, the tool returns an install hint instead of
+crashing:
+
+```text
+pip install 'hfagent[browser]' && playwright install chrome
+```
+
+| Env var | Default | Meaning |
+| :--- | :--- | :--- |
+| `HFAGENT_BROWSER_HEADLESS` | `false` (headed) | `1` / `true` hides the window |
+| `HFAGENT_BROWSER_PROFILE` | `~/.hfagent/chrome-profile` | dedicated user-data dir; the default Chrome profile is refused |
+| `HFAGENT_BROWSER_DOWNLOAD_DIR` | `~/Downloads/ihagent` | where downloads and screenshots are saved |
+| `HFAGENT_BROWSER_CHANNEL` | auto (`chrome`, else Chromium) | Playwright channel, e.g. `chrome` |
+| `HFAGENT_BROWSER_EXECUTABLE` | auto | path to a Chrome binary; skips channel detection |
+| `HFAGENT_BROWSER_TIMEOUT_MS` | `30000` | navigation and action timeout |
+| `HFAGENT_BROWSER_MAX_CHARS` | `6000` | cap for `browser_read` and snapshots |
 
 ## Configuration
 
@@ -133,6 +195,11 @@ as the file, so it does not hide a newer model in the project `.env` or in
 | `HFAGENT_MODEL` | `Qwen/Qwen2.5-Coder-32B-Instruct` | model id |
 | `HFAGENT_LOCAL_MODEL` | `~/.cache/huggingface/mlx/qwen2.5-0.5b-4bit` | model path used with `--local` |
 | `HFAGENT_MAX_STEPS` | `25` | agent loop iteration cap |
+| `HFAGENT_BROWSER_HEADLESS` | headed | set `1` to hide the ihagent Chrome window |
+| `HFAGENT_BROWSER_PROFILE` | `~/.hfagent/chrome-profile` | dedicated Chrome profile (never the default profile) |
+| `HFAGENT_BROWSER_DOWNLOAD_DIR` | `~/Downloads/ihagent` | download and screenshot directory |
+| `HFAGENT_BROWSER_CHANNEL` | auto | Playwright channel; macOS prefers `chrome` |
+| `HFAGENT_BROWSER_EXECUTABLE` | auto | optional Chrome executable path |
 
 ### Hugging Face GPU (cloud)
 

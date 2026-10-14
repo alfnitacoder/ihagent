@@ -20,6 +20,14 @@ class Tool:
         """Human-readable preview shown at approval time; None -> show args."""
         return None
 
+    def requires_approval(self, **kwargs: Any) -> bool:
+        """Whether this call should go through the approval UI.
+
+        Defaults to ``needs_approval``. Tools that are only sometimes
+        risky (form submit, purchase, executable download) override this.
+        """
+        return self.needs_approval
+
     def spec(self) -> dict[str, Any]:
         return {
             "type": "function",

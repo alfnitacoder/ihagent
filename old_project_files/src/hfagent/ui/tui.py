@@ -679,6 +679,12 @@ class HfAgentApp(App):
                 self._approval_queue.put_nowait(False)
             except queue.Full:
                 pass
+        try:
+            from ..browser import shutdown_browser
+
+            shutdown_browser()
+        except Exception:
+            pass
 
     def refresh_header(self) -> None:
         cfg = self.agent.config

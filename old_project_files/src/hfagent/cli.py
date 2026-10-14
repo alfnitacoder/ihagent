@@ -184,6 +184,15 @@ def handle_resume(agent: Agent, ui: AgentUI, name: str) -> None:
     ui.on_status(f"resumed session: {name} ({len(messages)} messages)")
 
 
+def _shutdown_browser() -> None:
+    try:
+        from .browser import shutdown_browser
+
+        shutdown_browser()
+    except Exception:
+        pass
+
+
 def main(argv: list[str] | None = None) -> None:
     args = build_parser().parse_args(argv)
     if args.version:
@@ -203,31 +212,34 @@ def main(argv: list[str] | None = None) -> None:
         )
         print(format_config_report(config))
         return
-    if use_tui(args):
-        agent, _ = make_agent(args, ui=AgentUI(), require_key=False)
+    try:
+        if use_tui(args):
+            agent, _ = make_agent(args, ui=AgentUI(), require_key=False)
+            if args.resume:
+                messages = load_session(args.resume)
+                if not messages:
+                    sys.exit(f"session not found: {args.resume}")
+                agent.set_messages(messages)
+            try:
+                from .ui.tui import run_tui
+            except ImportError:
+                sys.exit(
+                    "textual is required for the TUI.\n"
+                    "  pip install 'textual>=8'\n"
+                    "  or run:  ihagent --console"
+                )
+            run_tui(agent)
+            return
+        agent, ui = make_agent(args, require_key=bool(args.prompt))
         if args.resume:
-            messages = load_session(args.resume)
-            if not messages:
-                sys.exit(f"session not found: {args.resume}")
-            agent.set_messages(messages)
-        try:
-            from .ui.tui import run_tui
-        except ImportError:
-            sys.exit(
-                "textual is required for the TUI.\n"
-                "  pip install 'textual>=8'\n"
-                "  or run:  ihagent --console"
-            )
-        run_tui(agent)
-        return
-    agent, ui = make_agent(args, require_key=bool(args.prompt))
-    if args.resume:
-        handle_resume(agent, ui, args.resume)
-    if args.prompt:
-        agent.run(args.prompt)
-        save_session(agent.messages, agent.config.model)
-        return
-    if not isinstance(ui, ConsoleUI):
-        ui = ConsoleUI()
-        agent.ui = ui
-    repl(agent, ui)
+            handle_resume(agent, ui, args.resume)
+        if args.prompt:
+            agent.run(args.prompt)
+            save_session(agent.messages, agent.config.model)
+            return
+        if not isinstance(ui, ConsoleUI):
+            ui = ConsoleUI()
+            agent.ui = ui
+        repl(agent, ui)
+    finally:
+        _shutdown_browser()
