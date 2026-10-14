@@ -1,7 +1,6 @@
 import React, { useRef, useState } from 'react';
 import { scanPdf, RULES, SEVERITY } from './pdfScanner';
 import { makeMaliciousPdf, makeCleanPdf } from './makeSamplePdf';
-import FloatingRobot from './robot/FloatingRobot';
 
 const LEVEL_META = {
   clean: { label: 'CLEAN', blurb: 'No dangerous features found in this document.' },
@@ -85,7 +84,6 @@ function App() {
   }
 
   return (
-    <>
     <div className="sentinel">
       <div className="backdrop" aria-hidden="true" />
 
@@ -219,8 +217,6 @@ function App() {
         <p>PDF Sentinel — structural PDF threat scanning, client-side. Built with React.</p>
       </footer>
     </div>
-    <FloatingRobot corner="bottom-right" demo />
-    </>
   );
 }
 

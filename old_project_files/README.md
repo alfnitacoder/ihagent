@@ -13,7 +13,7 @@ python3 -m venv .venv
 .venv/bin/ihagent
 ```
 
-`iheye` installs PyObjC on macOS (`pyobjc-framework-Cocoa`). The overlay does nothing on other platforms. The web robot and `HFAGENT_ROBOT_BRIDGE` are described in the repository README.
+`iheye` installs PyObjC on macOS (`pyobjc-framework-Cocoa`). The overlay does nothing on other platforms.
 
 Tests:
 

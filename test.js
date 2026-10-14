@@ -39,32 +39,6 @@ const html = ReactDOMServer.renderToString(React.createElement(App));
 assert(html.includes('PDF SENTINEL'), 'brand should render');
 assert(html.includes('What we look for'), 'detection section should render');
 
-const { setAgentState, getSnapshot, resetController, STATES } = require('./src/robot/controller');
-
-resetController();
-assert.deepStrictEqual(STATES, ['idle', 'thinking', 'listening', 'speaking', 'working', 'success', 'error']);
-assert(setAgentState('thinking') === true);
-assert(getSnapshot().state === 'thinking');
-assert(setAgentState('nope') === false);
-assert(getSnapshot().state === 'thinking');
-setAgentState('listening');
-assert(getSnapshot().state === 'listening');
-assert(getSnapshot().audioLevel == null);
-setAgentState('speaking', { audioLevel: 0.4, message: 'hello' });
-assert(getSnapshot().state === 'speaking');
-assert(getSnapshot().audioLevel === 0.4);
-assert(getSnapshot().message === 'hello');
-setAgentState('working');
-assert(getSnapshot().audioLevel == null);
-setAgentState('error', { message: 'failed' });
-assert(getSnapshot().state === 'error');
-assert(getSnapshot().message === 'failed');
-setAgentState('success');
-assert(getSnapshot().state === 'success');
-setAgentState('idle');
-assert(getSnapshot().state === 'idle');
-resetController();
-
 console.log('All tests passed');
 console.log('  malicious.pdf -> ' + mal.level + ' (score ' + mal.score + ', ' + mal.findings.length + ' findings)');
 console.log('  clean.pdf     -> ' + clean.level + ' (score ' + clean.score + ', ' + clean.findings.length + ' findings)');

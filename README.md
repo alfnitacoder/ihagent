@@ -13,7 +13,7 @@ Package `hfagent` 0.4.0, Python 3.10+, license MIT (declared in `old_project_fil
 - **Host control in the session.** `/url` tests and switches hosts, `/config` and `ihagent --show-config` print the effective settings and the source that won, a configured fallback host takes over on connection failures, and `/primary` switches back.
 - **Reasoning display.** Text from `reasoning` / `reasoning_content`, or from `<think>` tags, is shown dimmed as thought in the TUI and the console. A reply that also has a final answer or a tool call is kept. Reasoning alone is nudged for a final answer.
 - **Chrome browser tools.** A dedicated profile (`~/.hfagent/chrome-profile`), lazy launch, and y/N approval for form submits, purchases, and executable downloads. Page text is labelled untrusted.
-- **iheye (macOS).** An always-on-top face while the ihagent terminal is in the background. The eyes blink and follow the pointer, and the mouth moves while a reply is streaming. Hover opens a chat panel whose line is handled like the TUI composer. A question about the front app can attach that app once, at send time. A finished turn can show a short summary card, and a pending y/N approval shows on that card. Key activity makes it glance without reading which key was pressed. `/iheye` turns the bubble, tracking, the summary card, and look on or off. `HFAGENT_IHEYE_SKIN=classic` keeps the original bubble.
+- **iheye (macOS).** An always-on-top robot while the ihagent terminal is in the background. It floats, blinks, and follows the pointer. The mouth moves while a reply is streaming, and a tool run lights the chest. Hover opens a chat panel whose line is handled like the TUI composer. A question about the front app can attach that app once, at send time. A finished turn can show a short summary card, and a pending y/N approval shows on that card. Key activity makes it glance without reading which key was pressed. `/iheye` turns the bubble, tracking, the summary card, and look on or off. `HFAGENT_IHEYE_SKIN=grok` (or `face`), `classic`, or `robot` selects an older skin.
 
 ## Quick start
 
@@ -184,9 +184,11 @@ On macOS, ihagent starts a small always-on-top **iheye** bubble in a helper proc
 
 Terminal.app and iTerm2 hide the bubble only when the ihagent window or tab is the focused one (matched by tty). Warp, VS Code, Cursor, Ghostty, kitty, WezTerm, Alacritty, and Hyper hide it whenever that app is frontmost.
 
-The face follows the agent: idle is calm, thinking narrows the eyes and looks up, a streaming reply moves the mouth, a y/N approval pulses amber (`waiting`), and a finished turn smiles (`done`).
+The default skin is a small robot (`HFAGENT_IHEYE_SKIN=bot`). Glossy white head and body, a black glass face, cyan LED eyes and mouth, glowing ear rings, a lit antenna, and an energy ring underneath. It is painted in `drawRect_` with Core Graphics — shaded ellipses, highlights, and shadows. The view does not host a layer tree. Clicks outside the robot fall through.
 
-The default skin is that face (`HFAGENT_IHEYE_SKIN=grok`, or `face`). It is a dark circle with white eyes and a mouth, drawn in the view the same way the classic bubble is (Core Graphics in `drawRect_`, not a layer tree). The eyes blink, breathe, and follow the pointer. Clicks outside the circle fall through. `HFAGENT_IHEYE_SKIN=classic` is the original rounded bubble labeled **iheye**. `HFAGENT_IHEYE_SKIN=robot` keeps the brushed-metal eye, also painted in `drawRect_`. The helper reads the skin when it starts.
+Idle floats, blinks, and turns the ring slowly. Thinking tilts the head, narrows the eyes, and speeds the ring. A streaming reply moves the mouth (there is no speech audio to sync to). A tool run speeds the ring and lights the chest mark. A finished turn smiles, bounces, and waves, then sits idle while the protocol state is still `done`. A y/N approval (`waiting`), or a failed turn, turns the LEDs amber and holds a concerned face. ihagent has no microphone, so the listening pose is drawn for previews and is not selected by a live session. `HFAGENT_IHEYE_REDUCE_MOTION=1`, or the macOS Reduce Motion setting, holds the pose: no bob, spin, wave, or blink. The eyes still follow the pointer. `old_project_files/scripts/render_iheye_bot.py` rasterizes that same draw list, including the unused listening frame, on a machine that cannot open the overlay.
+
+`HFAGENT_IHEYE_SKIN=grok` (alias `face`) is the dark circle with white eyes and a mouth. `HFAGENT_IHEYE_SKIN=classic` is the original rounded bubble labeled **iheye**. `HFAGENT_IHEYE_SKIN=robot` is the brushed-metal eye. All three are painted in `drawRect_` the same way. The helper reads the skin when it starts. Hover chat, the summary card, hiding while ihagent is focused, and pointer tracking are the same for every skin.
 
 Hover the eye and a panel opens under it (`Message ihagent`). Enter sends the line. The TUI and the line REPL treat it like a line you typed: the transcript shows it, a new turn starts when the agent is idle, and a line sent mid-task is picked up on the next step (`stop` still cancels). The reply streams back into the panel, trimmed to the newest lines (about six lines, 360 characters). The panel stays open while the pointer is over the eye or the panel, or while the text field is focused. Esc closes it and keeps it closed until the pointer leaves and comes back. Moving the pointer away closes it after about 0.35 seconds. After you send, focus returns to the app you were using when the helper had become frontmost.
 
@@ -198,7 +200,7 @@ iheye does not capture the app that is hosting ihagent, so that terminal is neve
 
 When a turn finishes and the bubble is visible, a card under the eye shows the first lines of the answer (about four lines, 220 characters, no extra model call). It hides after 8 seconds. Hovering the card pauses that timer. Clicking the card opens the ihagent terminal. If a tool is waiting on y/N, the card shows the tool name, a short preview, and **y** / **N** buttons that answer the same prompt as the TUI. Turning summaries off hides that completion card. The approval card still shows.
 
-The eyes follow the pointer anywhere on the screen (`NSEvent.mouseLocation`). That needs no extra permission. A key-down in another app makes the face glance and blink for a short moment. The handler records only that a key went down. It does not read which key, and it does not write keystrokes to `~/.hfagent/iheye.log`. Idle animation ticks slowly (about 24fps for the face, 15fps for the robot skin, 8fps for classic); thinking, approval, and nearby pointer motion redraw faster. Hover chat, the summary card, and the y/N card are the same for every skin.
+The eyes follow the pointer anywhere on the screen (`NSEvent.mouseLocation`). That needs no extra permission. A key-down in another app makes the robot glance and blink for a short moment. The handler records only that a key went down. It does not read which key, and it does not write keystrokes to `~/.hfagent/iheye.log`. Idle animation ticks slowly (about 24fps for the bot and the grok face, 15fps for the brushed-metal eye, 8fps for classic); thinking, approval, and nearby pointer motion redraw faster. Hover chat, the summary card, and the y/N card are the same for every skin.
 
 The overlay is on by default on macOS and off elsewhere. It starts with the TUI, the line REPL, and `-p`. `--show-config` and `--version` do not start it. `ihagent --show-config` and `/config` include `iheye`, `iheye_track`, `iheye_summary`, `iheye_skin`, `iheye_look`, and whether PyObjC is installed. `~/.hfagent/iheye.log` is replaced on each launch.
 
@@ -233,54 +235,6 @@ iheye: keyboard glances need Accessibility permission (System Settings → Priva
 Enable the Python interpreter that runs ihagent (the venv's `python`, or Terminal, if that is what macOS lists).
 
 Looking at Safari needs **Develop → Allow JavaScript from Apple Events**. A screenshot needs **Screen Recording** for that same Python. If either is missing, the hover reply still runs and iheye prints a one-line hint. Accessibility text for non-browser apps uses the same Accessibility permission as keyboard glances.
-
-## Web robot mascot
-
-PDF Sentinel (the React app at the repository root) keeps its scanner and also hosts a floating 3D robot. The robot is procedural — there is no `.glb` in this repo — built with React Three Fiber and drei. It floats in a corner on a transparent canvas. Clicks land on the robot, the state buttons, and the chat panel; the rest of the canvas does not cover the page.
-
-Seven states: `idle`, `thinking`, `listening`, `speaking`, `working`, `success`, `error`. From the page, `window.IHAgentRobot.setAgentState('thinking')` (or a state button) switches it. Success celebrates and returns to idle. Error stays until the next state. `prefers-reduced-motion` settles on the pose instead of bobbing, spinning, and waving. If WebGL cannot start, a small CSS stand-in keeps the same controls.
-
-Install and run the existing webpack app:
-
-```bash
-npm install
-npm start          # http://127.0.0.1:3000
-npm test           # scanner plus the state controller
-npm run build
-```
-
-The state buttons on the widget exercise all seven poses. They do not pretend a microphone or a speech track exists. **Use microphone** asks the browser for a real mic and, only after permission, drives the listening pose from that level. `attachSpeechAudio(audioElement)` (from `src/robot`) lip-syncs while that element is actually playing. With neither, listening is an alert pose and speaking is a slightly open mouth plus a small gesture — not a fake viseme timeline and not a progress percent.
-
-### Connect it to ihagent
-
-The terminal agent can publish the phases it really has. Set this before `ihagent` (TUI, console, or `-p`):
-
-```bash
-export HFAGENT_ROBOT_BRIDGE=1
-export HFAGENT_ROBOT_PORT=8765   # optional
-ihagent
-```
-
-The bridge listens on `127.0.0.1` only and prints `robot bridge: http://127.0.0.1:8765/events`. The widget subscribes with `EventSource`. Mapping:
-
-| What ihagent is doing | Robot state |
-| :--- | :--- |
-| You send a turn (`thinking`) | `thinking` |
-| A tool starts | `working`, bubble names the tool |
-| Assistant text streams | the bubble updates; the pose stays put |
-| y/N approval (`waiting`) | `idle`, bubble says which tool |
-| Turn finishes cleanly (`done`) | `success`, then `idle` |
-| `on_error` (failed request, stopped, max steps) | `error` until the next turn |
-
-`listening` and `speaking` are not emitted here: ihagent has no mic stream and no speech audio. A down bridge leaves the robot on its current pose; it does not flip to error. Chat in the panel `POST`s `/message`, which uses the same hover-chat handler as iheye. If nothing is accepting chat, the panel says so and does not invent a reply.
-
-Override the URL with `window.__IHAGENT_ROBOT_URL` or the `bridgeUrl` prop on `FloatingRobot`. Corner (`bottom-right` by default), `size`, `demo`, and `showBubble` are props. Minimize unmounts the WebGL canvas.
-
-### Model, failures, performance
-
-Meshes are spheres, capsules, and toruses (white ceramic body, black glass face, cyan LEDs, blue ear rings, a lit antenna, a rotating ring). No external model file. To swap in a glTF later, replace the rig inside `src/robot/RobotScene.js` and keep `setAgentState`.
-
-Segment counts stay low, materials are shared, the pixel ratio caps at 1.5, and the frame loop pauses while the tab is hidden. Lights are a small rig plus a local environment of rectangles (no HDR download). Unmount disposes those materials. Unknown state names are ignored. If port 8765 is taken, ihagent prints the bind error and keeps running.
 
 ## Configuration
 
@@ -325,10 +279,9 @@ The first source that sets a value wins. `ihagent --show-config` and `/config` p
 | `HFAGENT_IHEYE` | on for macOS, off elsewhere | `0` / `off` disables the bubble. `/iheye on` and `/iheye off` persist it in `~/.hfagent/.env`. |
 | `HFAGENT_IHEYE_TRACK` | on | `0` / `off` stops the pupil following the pointer and keyboard glances. `/iheye track on` and `/iheye track off` persist it. |
 | `HFAGENT_IHEYE_SUMMARY` | on | `0` / `off` hides the completion card. `/iheye summary on` and `/iheye summary off` persist it. The y/N card still shows. |
-| `HFAGENT_IHEYE_SKIN` | `grok` | `grok` (alias `face`) is the animated face. `classic` is the original bubble. `robot` is the brushed-metal eye. Read when the helper starts. |
+| `HFAGENT_IHEYE_SKIN` | `bot` | `bot` is the robot. `grok` (alias `face`) is the animated face. `classic` is the original bubble. `robot` is the brushed-metal eye. Read when the helper starts. |
+| `HFAGENT_IHEYE_REDUCE_MOTION` | off | `1` / `on` stops the bot bobbing, spinning, waving, and blinking. macOS Reduce Motion does the same when this is unset. |
 | `HFAGENT_IHEYE_LOOK` | on | `0` / `off` stops one-shot capture of the front app. `/iheye look on` and `/iheye look off` persist it. |
-| `HFAGENT_ROBOT_BRIDGE` | off | `1` / `on` serves robot events at `http://127.0.0.1:8765/events`. |
-| `HFAGENT_ROBOT_PORT` | `8765` | Port for that bridge. Bound to localhost only. |
 
 There is no environment variable for temperature. Pass `--temperature`.
 
@@ -503,7 +456,7 @@ cd old_project_files
 pytest
 ```
 
-An editable install from `old_project_files/` itself is `pip install -e '.[dev,browser,iheye]'`. The suite covers the agent loop, config precedence, `/url` and fallback, context compaction, reasoning display, browser approvals, the TUI helpers, iheye focus, hover, summary, and supervisor rules, and the web robot bridge (`tests/test_robot_bridge.py`). Those iheye tests do not open AppKit. The overlay itself runs only on macOS. The suite does not launch a live model or a live browser. The robot bridge tests never mark a microphone or speech audio as present.
+An editable install from `old_project_files/` itself is `pip install -e '.[dev,browser,iheye]'`. The suite covers the agent loop, config precedence, `/url` and fallback, context compaction, reasoning display, browser approvals, the TUI helpers, and iheye focus, hover, summary, and supervisor rules. Those iheye tests do not open AppKit. The overlay itself runs only on macOS. The suite does not launch a live model or a live browser.
 
 Runtime dependencies are `openai`, `rich`, and `textual`. Browser tools additionally need `playwright`. The console entry points are both `hfagent.cli:main`.
 
@@ -512,8 +465,8 @@ Runtime dependencies are `openai`, `rich`, and `textual`. Browser tools addition
 ```text
 .
 ├── README.md                          # this file
-├── package.json                       # PDF Sentinel plus the floating robot widget
-├── src/                               # scanner, and src/robot (3D mascot)
+├── package.json                       # separate PDF Sentinel web app (not ihagent)
+├── src/                               # that web app
 ├── public/
 ├── .hfagent/skills/                   # project skills for this repo
 └── old_project_files/
@@ -530,11 +483,10 @@ Runtime dependencies are `openai`, `rich`, and `textual`. Browser tools addition
         ├── context.py                 # token estimate and summary
         ├── reasoning.py               # <think> and reasoning fields
         ├── browser.py                 # dedicated Chrome
-        ├── iheye/                     # macOS floating eye (helper process, robot skin assets)
-        ├── robot_bridge.py            # optional localhost SSE feed for the web robot
+        ├── iheye/                     # macOS floating overlay (bot, grok, classic, robot)
         ├── tools/                     # files, shell, ssh, memory, browser
         ├── ui/                        # Textual TUI and Rich console
         └── builtin_skills/            # SKILL.md recipes loaded by directory name
 ```
 
-The webpack app at the repository root is PDF Sentinel, and the floating robot is mounted on that page. Scanning behavior is unchanged. Run the agent with `ihagent` after the install above. `npm start` serves the scanner and the robot; it does not start the agent. Set `HFAGENT_ROBOT_BRIDGE=1` when the robot should follow a live session.
+The webpack app at the repository root (PDF Sentinel) is independent of the agent. Run the agent with `ihagent` after the install above, not with `npm start`.

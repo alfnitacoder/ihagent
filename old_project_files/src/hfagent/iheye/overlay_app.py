@@ -21,6 +21,7 @@ import time
 import traceback
 
 from .appearance import eye_geometry
+from .bot import bot_pose, describe_bot, point_in_bot, reduce_motion_from_env
 from .face import describe_face, face_pose, point_in_face
 from .focus import FrontApp, activation_plan, eye_should_show, same_host
 from .host import HostInfo, front_tty_script, run_osascript
@@ -74,6 +75,30 @@ from .tracking import (
 
 PANEL_W = CLASSIC_W
 PANEL_H = CLASSIC_H
+
+
+def overlay_reduce_motion(environ: dict | None = None) -> bool:
+    """Env flag, or macOS Reduce Motion when no environ dict is passed in.
+
+    Tests pass ``environ`` and never import AppKit. The helper calls this
+    with no argument so a system setting can settle the bot.
+    """
+    if reduce_motion_from_env(environ):
+        return True
+    if environ is not None:
+        return False
+    try:
+        from AppKit import NSWorkspace
+    except ImportError:
+        return False
+    try:
+        workspace = NSWorkspace.sharedWorkspace()
+        checker = getattr(workspace, "accessibilityDisplayShouldReduceMotion", None)
+        if not callable(checker):
+            return False
+        return bool(checker())
+    except Exception:
+        return False
 
 
 def run_overlay(args, host: HostInfo) -> int:
@@ -167,8 +192,11 @@ def run_overlay(args, host: HostInfo) -> int:
             self.onClick = None
             self.onDrag = None
             self.onDragEnd = None
-            self._skin = "grok"
+            self._skin = "bot"
             self._speaking = False
+            self._working = False
+            self._failed = False
+            self._reduce_motion = False
             self._layout = None
             self._frame_image = None
             self._iris_image = None
@@ -193,6 +221,24 @@ def run_overlay(args, host: HostInfo) -> int:
             self.setNeedsDisplay_(True)
 
         @objc.python_method
+        def set_activity(self, working, failed):
+            working = bool(working)
+            failed = bool(failed)
+            if working == self._working and failed == self._failed:
+                return
+            self._working = working
+            self._failed = failed
+            self.setNeedsDisplay_(True)
+
+        @objc.python_method
+        def set_reduce_motion(self, enabled):
+            enabled = bool(enabled)
+            if enabled == self._reduce_motion:
+                return
+            self._reduce_motion = enabled
+            self.setNeedsDisplay_(True)
+
+        @objc.python_method
         def set_motion(self, phase, pupil, blink_extra):
             self._phase = float(phase)
             self._pupil = None if pupil is None else (float(pupil[0]), float(pupil[1]))
@@ -204,6 +250,8 @@ def run_overlay(args, host: HostInfo) -> int:
             bounds = self.bounds()
             x, y = float(local.x), float(local.y)
             width, height = float(bounds.size.width), float(bounds.size.height)
+            if self._skin == "bot" and not point_in_bot(x, y, width, height):
+                return None
             if self._skin == "robot" and self._layout:
                 outline = self._layout.get("outline") or []
                 if outline and not point_in_frame(x, y, width, height, outline):
@@ -444,7 +492,87 @@ def run_overlay(args, host: HostInfo) -> int:
             if clipped:
                 ctx.restoreGraphicsState()
 
+        @objc.python_method
+        def _paint_bot(self):
+            """Robot mascot in drawRect_. Same ops as describe_bot."""
+            pose = bot_pose(
+                self._state,
+                self._phase,
+                pupil=self._pupil,
+                blink_extra=self._blink_extra,
+                speaking=self._speaking,
+                working=self._working,
+                failed=self._failed,
+                reduce_motion=self._reduce_motion,
+            )
+            bounds = self.bounds()
+            NSColor.clearColor().set()
+            NSBezierPath.fillRect_(bounds)
+            for op in describe_bot(pose, float(bounds.size.width), float(bounds.size.height)):
+                self._paint_bot_op(op)
+
+        @objc.python_method
+        def _paint_bot_op(self, op):
+            kind = op.get("op")
+            rgb = op.get("rgb") or (1.0, 1.0, 1.0)
+            alpha = float(op.get("alpha", 1.0))
+            color = NSColor.colorWithCalibratedRed_green_blue_alpha_(rgb[0], rgb[1], rgb[2], alpha)
+            ctx = NSGraphicsContext.currentContext()
+            clip = op.get("clip")
+            clipped = clip is not None and ctx is not None
+            if clipped:
+                ctx.saveGraphicsState()
+                if "r" in clip:
+                    radius = float(clip["r"])
+                    rect = NSMakeRect(clip["cx"] - radius, clip["cy"] - radius, radius * 2.0, radius * 2.0)
+                else:
+                    rx, ry = float(clip["rx"]), float(clip["ry"])
+                    rect = NSMakeRect(clip["cx"] - rx, clip["cy"] - ry, rx * 2.0, ry * 2.0)
+                NSBezierPath.bezierPathWithOvalInRect_(rect).addClip()
+            color.set()
+            if kind == "oval":
+                rx, ry = float(op["rx"]), float(op["ry"])
+                NSBezierPath.bezierPathWithOvalInRect_(
+                    NSMakeRect(op["cx"] - rx, op["cy"] - ry, rx * 2.0, ry * 2.0)
+                ).fill()
+            elif kind == "stroke":
+                rx, ry = float(op["rx"]), float(op["ry"])
+                path = NSBezierPath.bezierPathWithOvalInRect_(
+                    NSMakeRect(op["cx"] - rx, op["cy"] - ry, rx * 2.0, ry * 2.0)
+                )
+                path.setLineWidth_(float(op.get("width") or 1.0))
+                path.stroke()
+            elif kind == "roundrect":
+                NSBezierPath.bezierPathWithRoundedRect_xRadius_yRadius_(
+                    NSMakeRect(op["x"], op["y"], op["w"], op["h"]),
+                    float(op.get("radius") or 0.0),
+                    float(op.get("radius") or 0.0),
+                ).fill()
+            elif kind == "limb":
+                path = NSBezierPath.alloc().init()
+                path.setLineWidth_(float(op.get("width") or 2.0))
+                path.setLineCapStyle_(1)
+                path.moveToPoint_(NSMakePoint(op["x0"], op["y0"]))
+                path.lineToPoint_(NSMakePoint(op["x1"], op["y1"]))
+                path.stroke()
+            elif kind == "poly":
+                pts = op.get("points") or []
+                if len(pts) >= 2:
+                    path = NSBezierPath.alloc().init()
+                    path.setLineWidth_(float(op.get("width") or 2.0))
+                    path.setLineCapStyle_(1)
+                    path.setLineJoinStyle_(1)
+                    path.moveToPoint_(NSMakePoint(pts[0][0], pts[0][1]))
+                    for px, py in pts[1:]:
+                        path.lineToPoint_(NSMakePoint(px, py))
+                    path.stroke()
+            if clipped:
+                ctx.restoreGraphicsState()
+
         def drawRect_(self, _dirty):
+            if self._skin == "bot":
+                self._paint_bot()
+                return
             if self._skin == "robot":
                 self._paint_robot()
                 return
@@ -641,6 +769,8 @@ def run_overlay(args, host: HostInfo) -> int:
             self._summary_left = 0.0
             self._summary_showing = False
             self.reply_text = ""
+            self._working = False
+            self._failed = False
             self._mode = "closed"
             self._shown = None
             self._eye_visible = False
@@ -693,6 +823,14 @@ def run_overlay(args, host: HostInfo) -> int:
                     self.summary_text = ""
                     self._summary_showing = False
                     self.reply_text = ""
+                    self._working = False
+                    self._failed = False
+                changed = True
+            if "working" in msg:
+                self._working = bool(msg.get("working"))
+                changed = True
+            if "failed" in msg:
+                self._failed = bool(msg.get("failed"))
                 changed = True
             if "reply" in msg:
                 self.reply_text = str(msg.get("reply") or "")
@@ -700,6 +838,10 @@ def run_overlay(args, host: HostInfo) -> int:
             if self.view is not None and ("state" in msg or "reply" in msg):
                 talking = self._state == "thinking" and bool(str(self.reply_text or "").strip())
                 self.view.set_speaking(talking)
+            if self.view is not None and (
+                "state" in msg or "working" in msg or "failed" in msg
+            ):
+                self.view.set_activity(self._working, self._failed)
             if "summary" in msg:
                 text = str(msg.get("summary") or "").strip()
                 visible = self.panel is not None and bool(self.panel.isVisible())
@@ -1269,6 +1411,7 @@ def run_overlay(args, host: HostInfo) -> int:
         controller = EyeController.alloc().init()
         view = EyeView.alloc().initWithFrame_(NSMakeRect(0, 0, eye_w, eye_h))
         view.use_skin(skin)
+        view.set_reduce_motion(overlay_reduce_motion())
         view.onClick = lambda: controller.focusHost_(None)
         view.onDrag = lambda _px, _py: controller.followDrag()
         view.onDragEnd = lambda px, py: save_position(args.position, px, py)

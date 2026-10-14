@@ -96,18 +96,22 @@ def _synthetic_rgb() -> tuple[bytes, int, int]:
     return bytes(buf), width, height
 
 
-def test_skin_defaults_to_grok_and_classic_is_explicit():
-    assert skin_from_env({}) == "grok"
+def test_skin_defaults_to_bot_and_others_stay_selectable():
+    assert skin_from_env({}) == "bot"
+    assert skin_from_env({"HFAGENT_IHEYE_SKIN": "bot"}) == "bot"
     assert skin_from_env({"HFAGENT_IHEYE_SKIN": "  FACE "}) == "grok"
+    assert skin_from_env({"HFAGENT_IHEYE_SKIN": "grok"}) == "grok"
     assert skin_from_env({"HFAGENT_IHEYE_SKIN": "  CLASSIC "}) == "classic"
     assert skin_from_env({"HFAGENT_IHEYE_SKIN": "robot"}) == "robot"
-    assert normalize_skin("nope") == "grok"
-    assert normalize_skin("") == "grok"
+    assert normalize_skin("nope") == "bot"
+    assert normalize_skin("") == "bot"
     assert resolve_skin("classic", {"HFAGENT_IHEYE_SKIN": "robot"}) == "classic"
     assert resolve_skin("  ", {"HFAGENT_IHEYE_SKIN": "classic"}) == "classic"
     assert resolve_skin("face", {}) == "grok"
+    assert resolve_skin("bot", {"HFAGENT_IHEYE_SKIN": "grok"}) == "bot"
     assert panel_size("classic") == (88.0, 100.0)
     assert panel_size("grok")[0] == panel_size("grok")[1]
+    assert panel_size("bot")[1] > panel_size("bot")[0]
     width, height = panel_size("robot")
     assert 120 <= width <= 160
     assert height > 40
@@ -242,6 +246,7 @@ def test_robot_idle_ticks_faster_than_classic_but_stays_cheap():
     )
     assert tick_interval(**common) == pytest.approx(1 / 8)
     assert tick_interval(**common, skin="grok") == pytest.approx(1 / 24)
+    assert tick_interval(**common, skin="bot") == pytest.approx(1 / 24)
     assert tick_interval(**common, skin="robot") == pytest.approx(1 / 15)
     assert tick_interval(**{**common, "state": "thinking"}, skin="grok") == pytest.approx(1 / 30)
 
@@ -276,7 +281,7 @@ def test_helper_command_passes_skin_and_overlay_keeps_python_methods():
         position_path="/tmp/pos.json",
         host=host,
     )
-    assert default[default.index("--skin") + 1] == "grok"
+    assert default[default.index("--skin") + 1] == "bot"
 
     overlay = Path(__file__).resolve().parents[1] / "src" / "hfagent" / "iheye" / "overlay_app.py"
     source = overlay.read_text(encoding="utf-8")
@@ -299,7 +304,7 @@ def test_config_report_names_the_skin(monkeypatch):
 
     monkeypatch.delenv("HFAGENT_IHEYE_SKIN", raising=False)
     report = format_config_report(Config.load())
-    assert "iheye_skin=grok" in report
+    assert "iheye_skin=bot" in report
     monkeypatch.setenv("HFAGENT_IHEYE_SKIN", "classic")
     report = format_config_report(Config.load())
     assert "iheye_skin=classic" in report
