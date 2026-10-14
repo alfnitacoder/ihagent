@@ -37,6 +37,7 @@ __all__ = [
     "enabled_from_env",
     "handle_command",
     "publish",
+    "publish_activity",
     "publish_approval",
     "publish_reply",
     "publish_summary",
@@ -69,10 +70,16 @@ def publish(state: str) -> None:
         get_supervisor().set_state(state)
     except Exception:
         pass
-    try:
-        from ..robot_bridge import bridge
 
-        bridge.note_iheye(state)
+
+def publish_activity(*, working: bool | None = None, failed: bool | None = None) -> None:
+    """Bot-only flags. ``working`` is a running tool. ``failed`` turns the done pulse amber.
+
+    Never raises. Unknown to the protocol state list, so grok, classic, and
+    the brushed-metal eye keep the states they already had.
+    """
+    try:
+        get_supervisor().note_activity(working=working, failed=failed)
     except Exception:
         pass
 
@@ -97,12 +104,6 @@ def publish_approval(tool: str, preview: str) -> None:
     """Show the y/N card. Never raises."""
     try:
         get_supervisor().note_approval(tool, preview)
-    except Exception:
-        pass
-    try:
-        from ..robot_bridge import bridge
-
-        bridge.note_approval(tool, preview)
     except Exception:
         pass
 

@@ -531,20 +531,6 @@ class AgentUI:
 
 
 class Agent:
-    @property
-    def ui(self) -> AgentUI:
-        return self._ui
-
-    @ui.setter
-    def ui(self, value: AgentUI) -> None:
-        self._ui = value
-        try:
-            from .robot_bridge import attach_ui
-
-            attach_ui(value)
-        except Exception:
-            pass
-
     def __init__(self, config: Config, registry: ToolRegistry, ui: AgentUI):
         self.config = config
         self.registry = registry
@@ -670,8 +656,33 @@ class Agent:
 
     # ------------------------------------------------------------------- loop
 
+    def _note_eye_failed(self) -> None:
+        """Amber on the bot. Other skins still receive whatever state comes next."""
+        try:
+            from .iheye import publish_activity
+
+            publish_activity(failed=True)
+        except Exception:
+            pass
+
+    def _note_eye_error(self, message: str) -> None:
+        self._note_eye_failed()
+        self.ui.on_error(message)
+
+    def _note_eye_working(self, active: bool) -> None:
+        try:
+            from .iheye import publish_activity
+
+            publish_activity(working=bool(active))
+        except Exception:
+            pass
+
     def run(self, user_input: str) -> str:
-        """Run one turn. iheye shows thinking, then a done pulse."""
+        """Run one turn. iheye shows thinking, then a done pulse.
+
+        A raised error marks the bot amber before that pulse. Grok, classic,
+        and the brushed-metal eye still see ``done``.
+        """
         from .iheye import publish, publish_summary
 
         publish("thinking")
@@ -679,6 +690,9 @@ class Agent:
         try:
             result = self._run(user_input)
             return result
+        except Exception:
+            self._note_eye_failed()
+            raise
         finally:
             try:
                 publish_summary(result if isinstance(result, str) else "")
@@ -715,14 +729,14 @@ class Agent:
         def roll_back(reason: str) -> str:
             """Discard the poisoned exchange so history stays clean."""
             del self.messages[self._exchange_start :]
-            self.ui.on_error(reason)
+            self._note_eye_error(reason)
             return ""
         def finish(content: str) -> str | None:
             """End the turn, unless the user just added a mid-task note."""
             kind = self._consume_steer()
             if kind == "stop":
                 self._patch_interrupted()
-                self.ui.on_error("stopped")
+                self._note_eye_error("stopped")
                 return ""
             if kind == "note":
                 return None
@@ -732,7 +746,7 @@ class Agent:
             for _step in range(self.config.max_steps):
                 if self._consume_steer() == "stop":
                     self._patch_interrupted()
-                    self.ui.on_error("stopped")
+                    self._note_eye_error("stopped")
                     return ""
                 message = self._step()
                 if message.get("tool_calls"):
@@ -1025,9 +1039,9 @@ class Agent:
                 return done
         except KeyboardInterrupt:
             self._patch_interrupted()
-            self.ui.on_error("interrupted by user")
+            self._note_eye_error("interrupted by user")
             return ""
-        self.ui.on_error("reached max steps without a final answer")
+        self._note_eye_error("reached max steps without a final answer")
         return ""
 
     # ------------------------------------------------------------- internals
@@ -1241,6 +1255,7 @@ class Agent:
                 return
             content_parts.append(text)
             self.ui.on_assistant_delta(text)
+            self._note_eye_working(False)
             _push_reply("".join(content_parts))
 
         def add_thought(text: str) -> None:
@@ -1398,6 +1413,7 @@ class Agent:
                 f"remote task on {args['host']}: executing, waiting for "
                 "completion..."
             )
+        self._note_eye_working(True)
         try:
             result = tool.run(**args)
         except Exception as exc:  # surfaced to the model as an Observation

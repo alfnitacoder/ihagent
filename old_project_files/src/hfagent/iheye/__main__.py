@@ -25,7 +25,11 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--track", default="1", help="1 to follow the pointer")
     parser.add_argument("--summary", default="1", help="1 to show the completion card")
     parser.add_argument("--look", default="1", help="1 to capture the front app on hover send")
-    parser.add_argument("--skin", default="", help="grok (default), face, classic, or robot")
+    parser.add_argument(
+        "--skin",
+        default="",
+        help="bot (default), grok, face, classic, or robot",
+    )
     return parser
 
 

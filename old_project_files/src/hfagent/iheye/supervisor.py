@@ -67,7 +67,7 @@ def look_enabled(environ: dict[str, str] | None = None) -> bool:
 
 
 def skin_name(environ: dict[str, str] | None = None) -> str:
-    """``HFAGENT_IHEYE_SKIN`` — ``grok`` (default), ``classic``, or ``robot``."""
+    """``HFAGENT_IHEYE_SKIN`` — ``bot`` (default), ``grok``, ``classic``, or ``robot``."""
     return skin_from_env(environ)
 
 
@@ -107,7 +107,7 @@ def helper_command(
     track: bool = True,
     summary: bool = True,
     look: bool = True,
-    skin: str = "grok",
+    skin: str = "bot",
 ) -> list[str]:
     return [
         executable or sys.executable,
@@ -162,6 +162,8 @@ class EyeSupervisor:
         self.model_name = ""
         self.model_base = ""
         self.skin = skin_from_env()
+        self._working = False
+        self._failed = False
         self.host: HostInfo | None = None
         self.on_chat = None
         self.on_approval = None
@@ -237,7 +239,11 @@ class EyeSupervisor:
         self._log_fh = log_fh
         self.host = host
         self._stopped.clear()
-        self._pending = {"state": self.state}
+        self._pending = {
+            "state": self.state,
+            "working": self._working,
+            "failed": self._failed,
+        }
         self._pending_msgs["options"] = {
             "track": self.track,
             "summary_enabled": self.summary_enabled,
@@ -296,12 +302,30 @@ class EyeSupervisor:
             return
         with self._lock:
             self.state = state
+            if state == "thinking":
+                self._working = False
+                self._failed = False
+            payload = {"state": state, "working": self._working, "failed": self._failed}
             if self._proc is None:
                 return
-            self._pending = {"state": state}
+            self._pending = payload
             self._send_locked(self._pending)
             if self._sock is not None:
                 self._pending = None
+
+    def note_activity(self, *, working: bool | None = None, failed: bool | None = None) -> None:
+        """Side flags for the bot skin. Not agent states, so other skins ignore them."""
+        message: dict = {}
+        with self._lock:
+            if working is not None:
+                self._working = bool(working)
+                message["working"] = self._working
+            if failed is not None:
+                self._failed = bool(failed)
+                message["failed"] = self._failed
+            if not message or self._proc is None:
+                return
+            self._enqueue_locked("activity", message)
 
     def note_reply(self, text: str, final: bool = False) -> None:
         """Push the latest assistant text. Throttled unless this is the final cut."""
