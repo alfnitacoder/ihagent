@@ -692,12 +692,21 @@ def format_config_report(config: "Config") -> str:
         lines.append(f"{name}={shown}  [{source}]")
     lines.extend(_browser_report_lines())
     lines.extend(_iheye_report_lines())
+    lines.extend(_mcp_report_lines())
     return "\n".join(lines)
 
 
 def _iheye_report_lines() -> list[str]:
     try:
         from .iheye import config_report_lines
+    except Exception:
+        return []
+    return config_report_lines()
+
+
+def _mcp_report_lines() -> list[str]:
+    try:
+        from .mcp import config_report_lines
     except Exception:
         return []
     return config_report_lines()

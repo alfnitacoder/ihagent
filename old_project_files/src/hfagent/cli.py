@@ -271,6 +271,24 @@ def handle_resume(agent: Agent, ui: AgentUI, name: str) -> None:
     )
 
 
+def _start_mcp(agent: Agent) -> None:
+    try:
+        from .mcp import start
+
+        start(agent)
+    except Exception:
+        return
+
+
+def _stop_mcp() -> None:
+    try:
+        from .mcp import stop
+
+        stop()
+    except Exception:
+        return
+
+
 def _start_iheye() -> None:
     try:
         from .iheye import start_if_enabled
@@ -322,6 +340,7 @@ def main(argv: list[str] | None = None) -> None:
     try:
         if use_tui(args):
             agent, _ = make_agent(args, ui=AgentUI(), require_key=False)
+            _start_mcp(agent)
             if args.resume:
                 opened = open_session(args.resume)
                 if not opened or not opened["messages"]:
@@ -340,6 +359,7 @@ def main(argv: list[str] | None = None) -> None:
             run_tui(agent)
             return
         agent, ui = make_agent(args, require_key=bool(args.prompt))
+        _start_mcp(agent)
         if args.resume:
             handle_resume(agent, ui, args.resume)
         _start_iheye()
@@ -352,5 +372,6 @@ def main(argv: list[str] | None = None) -> None:
             agent.ui = ui
         repl(agent, ui)
     finally:
+        _stop_mcp()
         _stop_iheye()
         _shutdown_browser()

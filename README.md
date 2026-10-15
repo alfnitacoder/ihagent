@@ -13,6 +13,7 @@ Package `hfagent` 0.4.0, Python 3.10+, license MIT (declared in `old_project_fil
 - **Host control in the session.** `/url` tests and switches hosts, `/config` and `ihagent --show-config` print the effective settings and the source that won, a configured fallback host takes over on connection failures, and `/primary` switches back.
 - **Reasoning display.** Text from `reasoning` / `reasoning_content`, or from `<think>` tags, is shown dimmed as thought in the TUI and the console. A reply that also has a final answer or a tool call is kept. Reasoning alone is nudged for a final answer.
 - **Chrome browser tools.** A dedicated profile (`~/.hfagent/chrome-profile`), lazy launch, and y/N approval for form submits, purchases, and executable downloads. Page text is labelled untrusted.
+- **MCP client.** Connect stdio and remote HTTP servers from `~/.hfagent/mcp.json` (Claude Desktop / Cursor `mcpServers` shape). Their tools show up as `server__tool`. Google Workspace (Gmail, Calendar, Drive) is a `/mcp add google` preset.
 - **iheye (macOS).** An always-on-top robot while the ihagent terminal is in the background. It floats, blinks, and follows the pointer. The mouth moves while a reply is streaming, and a tool run lights the chest. Hover opens a chat panel whose line is handled like the TUI composer. A question about the front app can attach that app once, at send time. A finished turn can show a short summary card, and a pending y/N approval shows on that card. Key activity makes it glance without reading which key was pressed. `/iheye` turns the bubble, tracking, the summary card, and look on or off. `HFAGENT_IHEYE_SKIN=grok` (or `face`), `classic`, or `robot` selects an older skin.
 
 ## Quick start
@@ -282,6 +283,9 @@ The first source that sets a value wins. `ihagent --show-config` and `/config` p
 | `HFAGENT_IHEYE_SKIN` | `bot` | `bot` is the robot. `grok` (alias `face`) is the animated face. `classic` is the original bubble. `robot` is the brushed-metal eye. Read when the helper starts. |
 | `HFAGENT_IHEYE_REDUCE_MOTION` | off | `1` / `on` stops the bot bobbing, spinning, waving, and blinking. macOS Reduce Motion does the same when this is unset. |
 | `HFAGENT_IHEYE_LOOK` | on | `0` / `off` stops one-shot capture of the front app. `/iheye look on` and `/iheye look off` persist it. |
+| `HFAGENT_MCP_DISABLE` | off | `1` / `on` skips connecting servers in `~/.hfagent/mcp.json`. |
+| `HFAGENT_MCP_CONFIG` | `~/.hfagent/mcp.json` | Override the MCP server file. |
+| `HFAGENT_MCP_TOKENS` | `~/.hfagent/mcp-tokens` | OAuth token directory for remote MCP servers (files are mode `0600`). |
 
 There is no environment variable for temperature. Pass `--temperature`.
 
@@ -303,6 +307,7 @@ There is no environment variable for temperature. Pass `--temperature`.
 | `/primary` | Probe the original host and switch back, unless that probe is a connection failure. |
 | `/config` | Effective settings and the source of each. |
 | `/browser [close]` | Chrome status, or close the window. |
+| `/mcp` | List MCP servers, status, and tool counts. Subcommands: `add`, `remove`, `login`, `tools`, `reload`, `enable`, `disable`. |
 | `/iheye [on\|off]` | macOS floating eye. `track on\|off`, `summary on\|off`, and `look on\|off` toggle gaze, the completion card, and one-shot capture. |
 | `/memory` | Show long-term memory. |
 | `/forget` | Wipe long-term memory. |
@@ -345,9 +350,103 @@ There is no environment variable for temperature. Pass `--temperature`.
 | `browser_wait` | Wait for time, text, or a selector | — |
 | `browser_download` | Save a file and report the path | y/N for an executable |
 
-`--approval auto`, `-y` / `--yolo`, and `HFAGENT_YOLO=1` skip these prompts.
+`--approval auto`, `-y` / `--yolo`, and `HFAGENT_YOLO=1` skip these prompts. MCP tools follow the same prompt: see [MCP servers](#mcp-servers).
 
 `ssh_run` is one non-interactive command per call (`BatchMode=yes`, `ConnectTimeout=10`, ControlMaster multiplexing). `background: true` on `ssh_run` or `run_command` starts the command under `nohup` and returns a pid plus a log at `/tmp/hfagent-task-HHMMSS.log`. An SSH background log ends with `BG_EXIT` and `BG_DONE`. A local background command is checked with `ps -p`.
+
+## MCP servers
+
+IHAgent connects to [Model Context Protocol](https://modelcontextprotocol.io) servers at startup, on a background thread, and registers their tools next to the built-in ones. A tool from the server `google` named `search_gmail_messages` is exposed as `google__search_gmail_messages`. The model calls that name; IHAgent routes it, and the call marks iheye as working the same way `run_command` does. On the bot skin that lights the chest.
+
+Config lives in `~/.hfagent/mcp.json` (override with `HFAGENT_MCP_CONFIG`). The shape matches Claude Desktop and Cursor:
+
+```json
+{
+  "mcpServers": {
+    "filesystem": {
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-filesystem", "/ABSOLUTE/PATH"]
+    },
+    "docs": {
+      "url": "https://example.com/mcp",
+      "headers": {"Authorization": "Bearer YOUR_TOKEN"}
+    }
+  }
+}
+```
+
+Stdio servers use `command`, `args`, `env`, and optional `cwd`. Remote servers use `url` and `headers`. IHAgent tries Streamable HTTP first and falls back to SSE when the endpoint refuses that transport (`transport` can be `http` or `sse` to force one). A copy of the presets is in `old_project_files/examples/mcp.json`. The file is written mode `0600` because `env` and `headers` can hold secrets.
+
+Startup does not block the TUI. A server that fails to spawn, crashes, or returns a tool error is reported as text (`Error: …`). The session keeps running. The next call tries to reconnect once. Stderr from a stdio server is appended to `~/.hfagent/mcp-logs/<name>.log`.
+
+### Slash commands
+
+| Command | Effect |
+| :--- | :--- |
+| `/mcp` | Name, status (`ready`, `connecting`, `login`, `error`, `disabled`), tool count, and how it is launched. |
+| `/mcp add <name>` | Add a preset, a URL, or a stdio command, then connect. |
+| `/mcp remove <name>` | Disconnect and delete that server from `mcp.json`. |
+| `/mcp login <name>` | Browser sign-in for a remote server that uses MCP OAuth. |
+| `/mcp tools [name]` | List exposed tools and whether each one is read-only or waits for approval. |
+| `/mcp reload` | Re-read `mcp.json` and reconnect enabled servers. |
+| `/mcp enable <name>` / `/mcp disable <name>` | Connect or disconnect without deleting the entry. |
+
+```text
+/mcp add google --client-id ID.apps.googleusercontent.com --client-secret SECRET
+/mcp add filesystem ~/code
+/mcp add github --token ghp_...
+/mcp add fetch
+/mcp add docs https://example.com/mcp --header "Authorization: Bearer TOKEN"
+/mcp add local -- python3 /path/to/server.py
+```
+
+Quote a header when the value contains spaces.
+
+### Google Workspace (Gmail, Calendar, Drive)
+
+The preset uses [workspace-mcp](https://github.com/taylorwilsdon/google_workspace_mcp) (`workspace-mcp` on PyPI, v2.1.0 as of October 2026), the maintained open-source server for Gmail, Drive, Calendar, and the rest of Workspace. IHAgent launches the core tier for those three services:
+
+```bash
+uvx workspace-mcp --tools gmail drive calendar --tool-tier core
+```
+
+`uvx` downloads it on first run (Python 3.10+ and [uv](https://docs.astral.sh/uv/)). You do not clone the repo. Auth is Google's OAuth in your browser, performed by workspace-mcp, not by pasting a token into the chat.
+
+1. In [Google Cloud Console](https://console.cloud.google.com/), create or select a project.
+2. Enable the Gmail API, Google Drive API, and Google Calendar API (the same project as the OAuth client).
+3. Configure the OAuth consent screen. If the app stays in testing, add the Google account you will sign in with as a test user. The account `alffy.george@gmail.com` is only an example of that address — use your own, and do not commit it.
+4. Create an OAuth client ID of type **Desktop app**. Copy the client id and secret. Desktop clients do not need a redirect URI filled in by hand.
+5. In ihagent:
+
+```text
+/mcp add google --client-id YOUR_ID.apps.googleusercontent.com --client-secret YOUR_SECRET
+```
+
+Or export `GOOGLE_OAUTH_CLIENT_ID` and `GOOGLE_OAUTH_CLIENT_SECRET` (or put them in `~/.hfagent/.env`) and run `/mcp add google`. Optional: `USER_GOOGLE_EMAIL=alffy.george@gmail.com` tells workspace-mcp which account to prefer. Replace that example with your own address. IHAgent does not hardcode it.
+
+6. Ask for something that needs mail, calendar, or Drive. The first call opens a browser. Sign in with your Google account and approve access. workspace-mcp stores those Google tokens in its own credential store. `/mcp login google` prints this reminder; it does not send your password anywhere.
+
+`/mcp add google` limits the server to Gmail, Drive, and Calendar at the `core` tool tier so a 64K context is not filled with every Workspace API. Narrow it further in `mcp.json` with `"tools": ["search_gmail_messages", "get_events"]` or `"maxTools": 12`.
+
+### Other presets
+
+| Preset | What `/mcp add` writes | Notes |
+| :--- | :--- | :--- |
+| `filesystem` | `npx -y @modelcontextprotocol/server-filesystem <dir>` | Directory argument, or the current directory. |
+| `github` | `npx -y @modelcontextprotocol/server-github` | `GITHUB_PERSONAL_ACCESS_TOKEN` via `--token` or the environment. The npm package is the classic stdio server; GitHub's current remote server is `https://api.githubcopilot.com/mcp/` with an `Authorization: Bearer` header. |
+| `fetch` | `uvx mcp-server-fetch` | Fetch a public page as markdown. |
+
+### Remote OAuth
+
+For an HTTP MCP server that returns 401, `/mcp login <name>` runs the MCP authorization flow from the official Python SDK: protected-resource discovery, dynamic client registration, PKCE, and refresh. A tab opens on `127.0.0.1` and the redirect lands on a local `/callback`. Tokens and the registered client record are stored in `~/.hfagent/mcp-tokens/<name>.json` (file mode `0600`, directory `0700`). The next launch refreshes without a browser until the refresh token is rejected. Set `"oauth": true` (or `"oauth": {"scope": "user"}`) in `mcp.json` to do the same without the slash command.
+
+This is separate from Google sign-in. workspace-mcp's stdio preset talks to Google itself. MCP OAuth is how IHAgent authenticates *to a remote MCP server*.
+
+### Approvals and context
+
+A tool marked `readOnlyHint` runs without a prompt. A tool whose name writes, sends, or deletes (`send_note`, `delete_event`, …) always waits for the existing y/N approval, even if the hint says read-only. Anything else without a read-only hint also asks. `"autoApprove": ["search_gmail_messages"]` or `"autoApprove": ["*"]` on that server skips the prompt for those tools. `--approval auto` still skips every prompt.
+
+Only the names in `"tools"` are registered when that list is set. `"maxTools"` keeps the first N after that filter, sorted by name. Descriptions are shortened so a large server does not crowd out the conversation. `/tools` and the sidebar update when a server finishes connecting.
 
 ## Skills, memory, and sessions
 
@@ -438,6 +537,12 @@ ihagent --show-config
 | `iheye helper exited` | The overlay process quit during startup. Read `~/.hfagent/iheye.log` (replaced on each launch). |
 | `iheye failed to start: …` | The helper could not be spawned. The message includes the OS error. |
 | `usage: /iheye on\|off \| track on\|off \| summary on\|off \| look on\|off` | `/iheye track`, `/iheye summary`, and `/iheye look` take `on` or `off`. |
+| `mcp <name>: …` / server status `error` | The process did not start or the handshake failed. Read `~/.hfagent/mcp-logs/<name>.log`. Check `command` is on `PATH` (`uvx`, `npx`). |
+| `sign in with /mcp login <name>` | A remote server returned 401. `/mcp login <name>` opens the browser. For Google, use `/mcp add google` and approve the first tool call instead. |
+| `timed out waiting for the browser sign-in` | The local callback got nothing. Open the URL printed above `/mcp login` and finish consent. |
+| `MCP support needs the mcp package` | `pip install 'mcp>=2'` or reinstall `old_project_files`. |
+| MCP tool missing from `/tools` | The server is `disabled`, still `connecting`, or filtered by `tools` / `maxTools`. `/mcp tools <name>` shows what was registered. |
+| Google tool returns an OAuth or API error | Desktop client id/secret must be the env on that server. Enable Gmail, Drive, and Calendar in the same Cloud project, and add your account as a test user while the consent screen is in testing. |
 | `iheye: Safari did not share page text…` | Safari → Develop → Allow JavaScript from Apple Events, then ask again. |
 | `iheye: looking at this window needs Screen Recording permission…` | System Settings → Privacy & Security → Screen Recording, and enable the Python that runs ihagent. |
 | `iheye: keyboard glances need Accessibility permission …` | Pointer tracking still works. System Settings → Privacy & Security → Accessibility, and enable the Python that runs ihagent. |
@@ -458,7 +563,7 @@ pytest
 
 An editable install from `old_project_files/` itself is `pip install -e '.[dev,browser,iheye]'`. The suite covers the agent loop, config precedence, `/url` and fallback, context compaction, reasoning display, browser approvals, the TUI helpers, and iheye focus, hover, summary, and supervisor rules. Those iheye tests do not open AppKit. The overlay itself runs only on macOS. The suite does not launch a live model or a live browser.
 
-Runtime dependencies are `openai`, `rich`, and `textual`. Browser tools additionally need `playwright`. The console entry points are both `hfagent.cli:main`.
+Runtime dependencies are `openai`, `rich`, `textual`, and `mcp` (the official MCP Python SDK, used for stdio, Streamable HTTP, SSE, and remote OAuth). Browser tools additionally need `playwright`. The console entry points are both `hfagent.cli:main`.
 
 ## Project layout
 
@@ -484,6 +589,7 @@ Runtime dependencies are `openai`, `rich`, and `textual`. Browser tools addition
         ├── reasoning.py               # <think> and reasoning fields
         ├── browser.py                 # dedicated Chrome
         ├── iheye/                     # macOS floating overlay (bot, grok, classic, robot)
+        ├── mcp/                       # MCP client, oauth, ~/.hfagent/mcp.json
         ├── tools/                     # files, shell, ssh, memory, browser
         ├── ui/                        # Textual TUI and Rich console
         └── builtin_skills/            # SKILL.md recipes loaded by directory name

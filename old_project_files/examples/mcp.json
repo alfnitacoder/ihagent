@@ -1,0 +1,28 @@
+{
+  "mcpServers": {
+    "google": {
+      "command": "uvx",
+      "args": ["workspace-mcp", "--tools", "gmail", "drive", "calendar", "--tool-tier", "core"],
+      "env": {
+        "GOOGLE_OAUTH_CLIENT_ID": "YOUR_CLIENT_ID.apps.googleusercontent.com",
+        "GOOGLE_OAUTH_CLIENT_SECRET": "YOUR_CLIENT_SECRET",
+        "OAUTHLIB_INSECURE_TRANSPORT": "1"
+      }
+    },
+    "filesystem": {
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-filesystem", "/ABSOLUTE/PATH"]
+    },
+    "github": {
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-github"],
+      "env": {
+        "GITHUB_PERSONAL_ACCESS_TOKEN": "YOUR_GITHUB_TOKEN"
+      }
+    },
+    "fetch": {
+      "command": "uvx",
+      "args": ["mcp-server-fetch"]
+    }
+  }
+}

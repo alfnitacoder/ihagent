@@ -247,6 +247,10 @@ class ModelsReady(Message):
         self.names = names
 
 
+class ToolsChangedMsg(Message):
+    pass
+
+
 class RuntimeMsg(Message):
     def __init__(self, device: str, prompt_tokens: int, completion_tokens: int) -> None:
         super().__init__()
@@ -290,6 +294,9 @@ class TuiBridge(AgentUI):
 
     def on_runtime(self, device: str, prompt_tokens: int, completion_tokens: int) -> None:
         self.app.post_message(RuntimeMsg(device, prompt_tokens, completion_tokens))
+
+    def on_tools_changed(self) -> None:
+        self.app.post_message(ToolsChangedMsg())
 
     def approve(
         self, tool_name: str, arguments: dict, preview: str | None = None
@@ -1554,6 +1561,14 @@ class HfAgentApp(App):
         if self._stream is not None:
             await self._stop_stream()
         await self._finish_assistant(event.text or "")
+
+    def on_tools_changed_msg(self, event: ToolsChangedMsg) -> None:
+        del event
+        try:
+            names = self.agent.registry.names()
+        except Exception:
+            return
+        self.query_one("#tools-list", Static).update("\n".join(names))
 
     async def on_action_msg(self, event: ActionMsg) -> None:
         await self.mount_action(event.tool_name, event.arguments)
