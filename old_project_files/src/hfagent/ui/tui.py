@@ -1611,6 +1611,15 @@ class HfAgentApp(App):
 
 
 def run_tui(agent: Agent) -> None:
+    from ..terminal import install, restore
+
+    # Textual enables SGR mouse mode. Restore after app.run returns, including
+    # /exit, ctrl+q, and an exception from the app. atexit and signals cover
+    # the cases that never get back here.
+    install()
     app = HfAgentApp(agent)
     agent.ui = TuiBridge(app)
-    app.run()
+    try:
+        app.run()
+    finally:
+        restore()
