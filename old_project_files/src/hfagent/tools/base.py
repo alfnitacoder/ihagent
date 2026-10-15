@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import threading
 from typing import Any
 
 
@@ -42,17 +43,39 @@ class Tool:
 class ToolRegistry:
     def __init__(self) -> None:
         self._tools: dict[str, Tool] = {}
+        self._lock = threading.Lock()
 
     def register(self, tool: Tool) -> None:
-        if tool.name in self._tools:
-            raise ValueError(f"duplicate tool name: {tool.name}")
-        self._tools[tool.name] = tool
+        with self._lock:
+            if tool.name in self._tools:
+                raise ValueError(f"duplicate tool name: {tool.name}")
+            self._tools[tool.name] = tool
+
+    def unregister(self, name: str) -> None:
+        with self._lock:
+            self._tools.pop(name, None)
+
+    def swap(self, previous: list[str], tools: list[Tool]) -> None:
+        """Replace ``previous`` names with ``tools`` as one update."""
+        with self._lock:
+            owned = set(previous)
+            for tool in tools:
+                if tool.name in self._tools and tool.name not in owned:
+                    raise ValueError(f"duplicate tool name: {tool.name}")
+            for name in previous:
+                self._tools.pop(name, None)
+            for tool in tools:
+                self._tools[tool.name] = tool
 
     def get(self, name: str) -> Tool | None:
-        return self._tools.get(name)
+        with self._lock:
+            return self._tools.get(name)
 
     def names(self) -> list[str]:
-        return list(self._tools)
+        with self._lock:
+            return list(self._tools)
 
     def specs(self) -> list[dict[str, Any]]:
-        return [tool.spec() for tool in self._tools.values()]
+        with self._lock:
+            tools = list(self._tools.values())
+        return [tool.spec() for tool in tools]

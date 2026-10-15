@@ -524,6 +524,9 @@ class AgentUI:
     def on_runtime(self, device: str, prompt_tokens: int, completion_tokens: int) -> None:
         """GPU/CPU and token counts for the latest model call."""
 
+    def on_tools_changed(self) -> None:
+        """The tool list changed after an MCP connect, reload, or remove."""
+
     def approve(
         self, tool_name: str, arguments: dict, preview: str | None = None
     ) -> bool:

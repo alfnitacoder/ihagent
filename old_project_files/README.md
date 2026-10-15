@@ -2,7 +2,7 @@
 
 Python package for [IHAgent](../README.md) (InnovatelHub Solutions Ltd). The console commands are `ihagent` and `hfagent` (both `hfagent.cli:main`). Version 0.4.0.
 
-Install, hosts, configuration, slash commands, browser tools, the macOS iheye overlay, Kaggle notes, and troubleshooting are in the [repository README](../README.md). This file used to duplicate that guide.
+Install, hosts, configuration, slash commands, browser tools, MCP servers (including the Google Workspace preset), the macOS iheye overlay, Kaggle notes, and troubleshooting are in the [repository README](../README.md). This file used to duplicate that guide. An example `mcp.json` is in [`examples/mcp.json`](examples/mcp.json).
 
 From this directory:
 
