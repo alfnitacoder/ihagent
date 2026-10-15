@@ -2,8 +2,8 @@
 # Does not install or require the Hugging Face CLI.
 #
 # From the clone:
-#   powershell -ExecutionPolicy Bypass -File old_project_files\scripts\configure-ollama.ps1
-# From old_project_files:
+#   powershell -ExecutionPolicy Bypass -File ihagent\scripts\configure-ollama.ps1
+# From ihagent:
 #   powershell -ExecutionPolicy Bypass -File .\scripts\configure-ollama.ps1
 #   powershell -ExecutionPolicy Bypass -File .\scripts\configure-ollama.ps1 -Model qwen3:8b
 

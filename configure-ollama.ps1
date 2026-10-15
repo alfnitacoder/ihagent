@@ -1,4 +1,4 @@
-# Run from the clone root (the folder that contains old_project_files).
+# Run from the clone root (the folder that contains ihagent).
 #   powershell -ExecutionPolicy Bypass -File .\configure-ollama.ps1
 
 param(
@@ -7,7 +7,7 @@ param(
 
 $ErrorActionPreference = "Stop"
 $here = Split-Path -Parent $MyInvocation.MyCommand.Path
-$script = Join-Path $here "old_project_files\scripts\configure-ollama.ps1"
+$script = Join-Path $here "ihagent\scripts\configure-ollama.ps1"
 if (-not (Test-Path $script)) {
     throw "Missing $script. Clone the full ihagent repo and run this from that folder."
 }
