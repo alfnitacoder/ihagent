@@ -319,6 +319,19 @@ def _shutdown_browser() -> None:
 
 
 def main(argv: list[str] | None = None) -> None:
+    from .terminal import install, restore
+
+    install()
+    try:
+        _main(argv)
+    finally:
+        restore()
+        _stop_mcp()
+        _stop_iheye()
+        _shutdown_browser()
+
+
+def _main(argv: list[str] | None = None) -> None:
     args = build_parser().parse_args(argv)
     if args.version:
         from . import __version__
@@ -337,41 +350,36 @@ def main(argv: list[str] | None = None) -> None:
         )
         print(format_config_report(config))
         return
-    try:
-        if use_tui(args):
-            agent, _ = make_agent(args, ui=AgentUI(), require_key=False)
-            _start_mcp(agent)
-            if args.resume:
-                opened = open_session(args.resume)
-                if not opened or not opened["messages"]:
-                    sys.exit(f"session not found: {args.resume}")
-                agent.set_messages(opened["messages"])
-                agent.session_name = opened["name"]
-            try:
-                from .ui.tui import run_tui
-            except ImportError:
-                sys.exit(
-                    "textual is required for the TUI.\n"
-                    "  pip install 'textual>=8'\n"
-                    "  or run:  ihagent --console"
-                )
-            _start_iheye()
-            run_tui(agent)
-            return
-        agent, ui = make_agent(args, require_key=bool(args.prompt))
+    if use_tui(args):
+        agent, _ = make_agent(args, ui=AgentUI(), require_key=False)
         _start_mcp(agent)
         if args.resume:
-            handle_resume(agent, ui, args.resume)
+            opened = open_session(args.resume)
+            if not opened or not opened["messages"]:
+                sys.exit(f"session not found: {args.resume}")
+            agent.set_messages(opened["messages"])
+            agent.session_name = opened["name"]
+        try:
+            from .ui.tui import run_tui
+        except ImportError:
+            sys.exit(
+                "textual is required for the TUI.\n"
+                "  pip install 'textual>=8'\n"
+                "  or run:  ihagent --console"
+            )
         _start_iheye()
-        if args.prompt:
-            agent.run(args.prompt)
-            _autosave(agent)
-            return
-        if not isinstance(ui, ConsoleUI):
-            ui = ConsoleUI()
-            agent.ui = ui
-        repl(agent, ui)
-    finally:
-        _stop_mcp()
-        _stop_iheye()
-        _shutdown_browser()
+        run_tui(agent)
+        return
+    agent, ui = make_agent(args, require_key=bool(args.prompt))
+    _start_mcp(agent)
+    if args.resume:
+        handle_resume(agent, ui, args.resume)
+    _start_iheye()
+    if args.prompt:
+        agent.run(args.prompt)
+        _autosave(agent)
+        return
+    if not isinstance(ui, ConsoleUI):
+        ui = ConsoleUI()
+        agent.ui = ui
+    repl(agent, ui)
