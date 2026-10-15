@@ -4,7 +4,7 @@ IHAgent is a terminal coding agent from InnovatelHub Solutions Ltd. The command 
 
 On a real terminal the default interface is a Textual TUI. `--console` is the line REPL, and `-p` runs one prompt and exits. On macOS, a floating iheye bubble stays above other apps while the terminal that hosts ihagent is in the background.
 
-Package `hfagent` 0.4.0, Python 3.10+, license MIT (declared in `old_project_files/pyproject.toml`). Sources live in [`old_project_files/src/hfagent`](old_project_files/src/hfagent).
+Package `hfagent` 0.4.0, Python 3.10+, license MIT (declared in `ihagent/pyproject.toml`). Sources live in [`ihagent/src/hfagent`](ihagent/src/hfagent).
 
 ![IHAgent v0.4.0 Textual TUI: sessions sidebar, tools list, header showing cloud / remote / gpt-oss:120b, and the footer shortcuts](docs/images/ihagent-tui.png)
 
@@ -37,12 +37,12 @@ From the repository root:
 ```bash
 python3 -m venv .venv
 source .venv/bin/activate          # Windows: .venv\Scripts\activate
-pip install -e 'old_project_files[browser,iheye]'
+pip install -e 'ihagent[browser,iheye]'
 playwright install chrome
 ihagent
 ```
 
-`browser` installs Playwright. `iheye` installs PyObjC on macOS (`pyobjc-framework-Cocoa`, plus Quartz and Vision for a one-shot screenshot and OCR). On other platforms that extra is empty and the overlay stays off. Tests use the `dev` extra: `pip install -e 'old_project_files[dev,browser,iheye]'`.
+`browser` installs Playwright. `iheye` installs PyObjC on macOS (`pyobjc-framework-Cocoa`, plus Quartz and Vision for a one-shot screenshot and OCR). On other platforms that extra is empty and the overlay stays off. Tests use the `dev` extra: `pip install -e 'ihagent[dev,browser,iheye]'`.
 
 One prompt, or the line REPL:
 
@@ -59,7 +59,7 @@ export HF_TOKEN=hf_...             # https://huggingface.co/settings/tokens
 # export OLLAMA_API_KEY=...        # https://ollama.com/settings/keys
 ```
 
-Optional machine setup (from `old_project_files/`): `scripts/setup-machine.sh` creates a venv and can install Ollama; `scripts/setup-huggingface.sh` logs in to the router or, with `--gpu --yes`, a billed dedicated endpoint. Windows equivalents are the `.ps1` scripts next to them.
+Optional machine setup (from `ihagent/`): `scripts/setup-machine.sh` creates a venv and can install Ollama; `scripts/setup-huggingface.sh` logs in to the router or, with `--gpu --yes`, a billed dedicated endpoint. Windows equivalents are the `.ps1` scripts next to them.
 
 Runtime dependencies are `openai`, `rich`, `textual`, and `mcp` (the official MCP Python SDK). Browser tools additionally need `playwright`. Both console entry points are `hfagent.cli:main`.
 
@@ -222,9 +222,9 @@ ihagent --ollama                       # most recently modified installed model
 ihagent --ollama qwen2.5-coder:7b      # exact or unique substring
 ```
 
-`old_project_files/scripts/setup-machine.sh` can install Ollama, pull a model, and create `.venv` (`--model`, `--skip-ollama`, `--skip-model`, `--dev`). Some GGUF chat templates emit tool calls as text. IHAgent parses `<tool_call>{...}</tool_call>`, `<tool>...</tool>`, `<function=name>` blocks, fenced JSON with `name` / `arguments`, and a bare `{"name": ...}` object. Fabricated `<tool_response>` blocks are stripped and the model is nudged back to its tools.
+`ihagent/scripts/setup-machine.sh` can install Ollama, pull a model, and create `.venv` (`--model`, `--skip-ollama`, `--skip-model`, `--dev`). Some GGUF chat templates emit tool calls as text. IHAgent parses `<tool_call>{...}</tool_call>`, `<tool>...</tool>`, `<function=name>` blocks, fenced JSON with `name` / `arguments`, and a bare `{"name": ...}` object. Fabricated `<tool_response>` blocks are stripped and the model is nudged back to its tools.
 
-Apple Silicon MLX, from `old_project_files/`:
+Apple Silicon MLX, from `ihagent/`:
 
 ```bash
 python -m mlx_lm convert \
@@ -326,7 +326,7 @@ Config lives in `~/.hfagent/mcp.json` (override with `HFAGENT_MCP_CONFIG`). The 
 }
 ```
 
-Stdio servers use `command`, `args`, `env`, and optional `cwd`. Remote servers use `url` and `headers`. IHAgent tries Streamable HTTP first and falls back to SSE when the endpoint refuses that transport (`transport` can be `http` or `sse` to force one). A copy of the presets is in `old_project_files/examples/mcp.json`. The file is written mode `0600` because `env` and `headers` can hold secrets.
+Stdio servers use `command`, `args`, `env`, and optional `cwd`. Remote servers use `url` and `headers`. IHAgent tries Streamable HTTP first and falls back to SSE when the endpoint refuses that transport (`transport` can be `http` or `sse` to force one). A copy of the presets is in `ihagent/examples/mcp.json`. The file is written mode `0600` because `env` and `headers` can hold secrets.
 
 Startup does not block the TUI. A server that fails to spawn, crashes, or returns a tool error is reported as text (`Error: …`). The session keeps running. The next call tries to reconnect once. Stderr from a stdio server is appended to `~/.hfagent/mcp-logs/<name>.log`. Text results are returned as text. Images and other non-text content are summarised, without the raw bytes.
 
@@ -435,7 +435,7 @@ The agent publishes `idle`, `thinking`, `waiting`, and `done`. The bot maps thos
 | Turn finished (`done`) | Smiles, bounces, and waves, then sits idle. The protocol state stays `done` through that celebration. |
 | y/N approval (`waiting`), or a failed turn | LEDs turn amber and the face looks concerned. |
 
-ihagent has no microphone, so the listening pose is drawn for previews and is not selected by a live session. `HFAGENT_IHEYE_REDUCE_MOTION=1`, or the macOS Reduce Motion setting, holds the pose: no bob, spin, wave, or blink. The eyes still follow the pointer. `old_project_files/scripts/render_iheye_bot.py` rasterizes that same draw list, including the unused listening frame, on a machine that cannot open the overlay.
+ihagent has no microphone, so the listening pose is drawn for previews and is not selected by a live session. `HFAGENT_IHEYE_REDUCE_MOTION=1`, or the macOS Reduce Motion setting, holds the pose: no bob, spin, wave, or blink. The eyes still follow the pointer. `ihagent/scripts/render_iheye_bot.py` rasterizes that same draw list, including the unused listening frame, on a machine that cannot open the overlay.
 
 Idle animation ticks slowly (about 24fps for the bot and the grok face, 15fps for the brushed-metal eye, 8fps for classic). Thinking, approval, and nearby pointer motion redraw faster.
 
@@ -458,7 +458,7 @@ The eyes follow the pointer anywhere on the screen (`NSEvent.mouseLocation`). Th
 The overlay is on by default on macOS and off elsewhere. It starts with the TUI, the line REPL, and `-p`. `--show-config` and `--version` do not start it. `ihagent --show-config` and `/config` include `iheye`, `iheye_track`, `iheye_summary`, `iheye_skin`, `iheye_look`, and whether PyObjC is installed. `~/.hfagent/iheye.log` is replaced on each launch.
 
 ```bash
-pip install -e 'old_project_files[browser,iheye]'
+pip install -e 'ihagent[browser,iheye]'
 ihagent
 /iheye
 ```
@@ -517,7 +517,7 @@ Skills are `SKILL.md` recipes injected into the system prompt. Project overrides
 
 | Source | Path |
 | :--- | :--- |
-| Builtin | `old_project_files/src/hfagent/builtin_skills/<name>/SKILL.md` |
+| Builtin | `ihagent/src/hfagent/builtin_skills/<name>/SKILL.md` |
 | User | `~/.hfagent/skills/<name>/SKILL.md` |
 | Project | `./.hfagent/skills/<name>/SKILL.md` |
 
@@ -597,7 +597,7 @@ A dedicated Hugging Face GPU endpoint is a different host. `scripts/setup-huggin
 | `No Ollama API key found.` | For `https://ollama.com`, set `OLLAMA_API_KEY` or paste `/model_api=...`. |
 | `No Ollama model found.` | `ollama serve`, then `ollama list`, or `ihagent --ollama <model>`. |
 | `textual is required for the TUI.` | `pip install 'textual>=8'`, or run `ihagent --console`. |
-| `Error: browser tools need Playwright and Google Chrome.` | `pip install 'hfagent[browser]' && playwright install chrome` (from this repo: `pip install -e 'old_project_files[browser]'`). |
+| `Error: browser tools need Playwright and Google Chrome.` | `pip install 'hfagent[browser]' && playwright install chrome` (from this repo: `pip install -e 'ihagent[browser]'`). |
 | `Refusing to use the default Chrome profile` | Leave `HFAGENT_BROWSER_PROFILE` at `~/.hfagent/chrome-profile`. |
 | `Could not launch Chrome or Chromium.` | Install Google Chrome, or set `HFAGENT_BROWSER_EXECUTABLE` / `HFAGENT_BROWSER_CHANNEL`. |
 | `Cannot reach <url>: DNS failure.` | The host name does not resolve. A Cloudflare quick tunnel hostname changes when the tunnel restarts. Update `HF_BASE_URL` or `/url` the new host. |
@@ -622,7 +622,7 @@ A dedicated Hugging Face GPU endpoint is a different host. `scripts/setup-huggin
 | `35;62;59M` (or similar) after exit | SGR mouse reports left on by a killed process or an older build. Run `reset` in that shell. A current ihagent turns mouse mode off on the way out. See [Terminal restore](#terminal-restore). |
 | `iheye only runs on macOS` | Expected off Darwin. `/iheye on` still saves `HFAGENT_IHEYE=1` for a later Mac. |
 | `iheye off (HFAGENT_IHEYE=0). /iheye on to show it` | The bubble was turned off. `/iheye on`, or unset `HFAGENT_IHEYE` on macOS. |
-| `iheye needs PyObjC. pip install 'hfagent[iheye]'` | The `iheye` extra is missing. From this repo: `pip install -e 'old_project_files[browser,iheye]'`. |
+| `iheye needs PyObjC. pip install 'hfagent[iheye]'` | The `iheye` extra is missing. From this repo: `pip install -e 'ihagent[browser,iheye]'`. |
 | `pip install 'hfagent[iheye]'` | The helper process could not import AppKit. Same install as above. |
 | `iheye helper exited` | The overlay process quit during startup. Read `~/.hfagent/iheye.log` (replaced on each launch). |
 | `iheye failed to start: …` | The helper could not be spawned. The message includes the OS error. |
@@ -630,7 +630,7 @@ A dedicated Hugging Face GPU endpoint is a different host. `scripts/setup-huggin
 | `mcp <name>: …` / server status `error` | The process did not start or the handshake failed. Read `~/.hfagent/mcp-logs/<name>.log`. Check `command` is on `PATH` (`uvx`, `npx`). |
 | `sign in with /mcp login <name>` | A remote server returned 401. `/mcp login <name>` opens the browser. For Google, use `/mcp add google` and approve the first tool call instead. |
 | `timed out waiting for the browser sign-in` | The local callback got nothing. Open the URL printed above `/mcp login` and finish consent. |
-| `MCP support needs the mcp package` | `pip install 'mcp>=2'` or reinstall `old_project_files`. |
+| `MCP support needs the mcp package` | `pip install 'mcp>=2'` or reinstall `ihagent`. |
 | MCP tool missing from `/tools` | The server is `disabled`, still `connecting`, or filtered by `tools` / `maxTools`. `/mcp tools <name>` shows what was registered. |
 | Google tool returns an OAuth or API error | Desktop client id/secret must be the env on that server. Enable Gmail, Drive, and Calendar in the same Cloud project, and add your account as a test user while the consent screen is in testing. |
 | `iheye: Safari did not share page text…` | Safari → Develop → Allow JavaScript from Apple Events, then ask again. |
@@ -641,17 +641,17 @@ Connection errors name the base URL. `ihagent --show-config` is the first check 
 
 ## Project layout and tests
 
-Tests live in `old_project_files/tests` and use pytest (`testpaths = ["tests"]` in `pyproject.toml`).
+Tests live in `ihagent/tests` and use pytest (`testpaths = ["tests"]` in `pyproject.toml`).
 
 ```bash
 python3 -m venv .venv
 source .venv/bin/activate
-pip install -e 'old_project_files[dev,browser,iheye]'
-cd old_project_files
+pip install -e 'ihagent[dev,browser,iheye]'
+cd ihagent
 pytest
 ```
 
-An editable install from `old_project_files/` itself is `pip install -e '.[dev,browser,iheye]'`. The suite covers the agent loop, config precedence, `/url` and fallback, context compaction, reasoning display, browser approvals, the TUI helpers, MCP (in-process stdio server), terminal restore, and iheye focus, hover, summary, skins, and supervisor rules. Those iheye tests do not open AppKit. The overlay itself runs only on macOS. The suite does not launch a live model or a live browser.
+An editable install from `ihagent/` itself is `pip install -e '.[dev,browser,iheye]'`. The suite covers the agent loop, config precedence, `/url` and fallback, context compaction, reasoning display, browser approvals, the TUI helpers, MCP (in-process stdio server), terminal restore, and iheye focus, hover, summary, skins, and supervisor rules. Those iheye tests do not open AppKit. The overlay itself runs only on macOS. The suite does not launch a live model or a live browser.
 
 ```text
 .
@@ -661,7 +661,7 @@ An editable install from `old_project_files/` itself is `pip install -e '.[dev,b
 ├── src/                               # that web app
 ├── public/
 ├── .hfagent/skills/                   # project skills for this repo
-└── old_project_files/
+└── ihagent/
     ├── pyproject.toml                 # package hfagent; extras browser, iheye, dev
     ├── README.md                      # short pointer back here
     ├── examples/mcp.json              # preset mcpServers, placeholders only
