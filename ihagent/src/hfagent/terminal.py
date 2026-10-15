@@ -14,13 +14,18 @@ below sends those modes off, leaves the alt screen, then sends them off
 again on the primary screen.
 
 ``install`` arms ``atexit`` and handlers for SIGINT, SIGTERM, and SIGHUP.
-``restore`` is idempotent and is also called from ``finally`` blocks.
+It saves termios on that first call, which is before Textual (or anything
+else) switches the tty to raw mode. ``restore`` runs on the way out and is
+idempotent. It must not run mid-session: ``--console`` keeps the shell's
+line discipline, with ICRNL, ICANON, and ECHO forced on if a raw snapshot
+was all we had, so Enter submits instead of echoing ``^M``.
 """
 
 from __future__ import annotations
 
 import atexit
 import os
+import select
 import signal
 import sys
 from typing import Any
@@ -113,6 +118,34 @@ def _on_signal(signum: int, frame: Any) -> None:
     os.kill(os.getpid(), signum)
 
 
+def _copy_attrs(attrs: list) -> list:
+    """Deep-copy a termios list so a later raw-mode edit cannot mutate the snapshot."""
+    copied = list(attrs)
+    if len(copied) > 6 and isinstance(copied[6], list):
+        copied[6] = list(copied[6])
+    return copied
+
+
+def _attrs_to_apply(attrs: list) -> list:
+    """Line-input flags for Enter. An already-cooked snapshot is returned as-is."""
+    if termios is None or len(attrs) < 4:
+        return attrs
+    iflag = int(attrs[0])
+    lflag = int(attrs[3])
+    cooked = (
+        (iflag & termios.ICRNL) != 0
+        and (lflag & termios.ICANON) != 0
+        and (lflag & termios.ECHO) != 0
+    )
+    if cooked:
+        return attrs
+    fixed = _copy_attrs(attrs)
+    fixed[0] = iflag | termios.ICRNL
+    fixed[0] &= ~(getattr(termios, "IGNCR", 0) | getattr(termios, "INLCR", 0))
+    fixed[3] = lflag | termios.ICANON | termios.ECHO | termios.ISIG
+    return fixed
+
+
 def _capture() -> None:
     """Save termios once, before Textual switches the tty to raw mode."""
     global _saved_fd, _saved_attrs
@@ -122,17 +155,105 @@ def _capture() -> None:
     if fd is None:
         return
     try:
-        _saved_attrs = termios.tcgetattr(fd)
+        _saved_attrs = _copy_attrs(termios.tcgetattr(fd))
         _saved_fd = fd
     except termios.error:
         _saved_attrs = None
         _saved_fd = None
 
 
+def prepare_console() -> None:
+    """Cooked input for ``--console``. Does not mark the terminal restored.
+
+    Call this before reading a line, never as a substitute for ``restore``.
+    Exit still puts the original snapshot back (with Enter's flags on if that
+    snapshot was taken while the tty was already raw).
+    """
+    if termios is None:
+        return
+    fd = _tty_fd()
+    if fd is None:
+        return
+    if _saved_attrs is None:
+        _capture()
+    if _saved_attrs is None:
+        return
+    try:
+        termios.tcsetattr(fd, termios.TCSANOW, _attrs_to_apply(_saved_attrs))
+    except termios.error:
+        return
+
+
 def _restore_termios() -> None:
     if termios is None or _saved_attrs is None or _saved_fd is None:
         return
-    termios.tcsetattr(_saved_fd, termios.TCSANOW, _saved_attrs)
+    termios.tcsetattr(_saved_fd, termios.TCSANOW, _attrs_to_apply(_saved_attrs))
+
+
+def split_submit_line(data: bytes) -> tuple[bytes | None, bytes]:
+    """Split the first CR, LF, or CRLF. The break bytes are not part of the line."""
+    for index, byte in enumerate(data):
+        if byte not in (10, 13):
+            continue
+        end = index + 1
+        if byte == 13 and end < len(data) and data[end] == 10:
+            end += 1
+        return data[:index], data[end:]
+    return None, data
+
+
+def _decode_submit_line(line: bytes) -> str:
+    encoding = getattr(sys.stdin, "encoding", None) or "utf-8"
+    try:
+        text = line.decode(encoding, "surrogateescape")
+    except LookupError:
+        text = line.decode("utf-8", "surrogateescape")
+    return text.strip()
+
+
+def _commit_submit(pending: bytearray) -> str | None:
+    raw = bytes(pending)
+    line, rest = split_submit_line(raw)
+    if line is None:
+        return None
+    bare_cr = raw[len(line)] == 13 and (
+        len(line) + 1 >= len(raw) or raw[len(line) + 1] != 10
+    )
+    pending.clear()
+    pending.extend(rest)
+    if bare_cr:
+        # ICRNL was off, so the tty echoed ^M instead of moving to the next row.
+        try:
+            sys.stdout.write("\n")
+            sys.stdout.flush()
+        except Exception:
+            pass
+    return _decode_submit_line(line)
+
+
+def poll_submit_line(pending: bytearray, timeout: float, fd: int | None = None) -> str | None:
+    """Return one CR- or LF-terminated line, or None if ``timeout`` elapses.
+
+    Raises ``EOFError`` when the input stream closes. A bare CR submits, so
+    macOS Terminal's Enter key works even if ICRNL is off.
+    """
+    ready_line = _commit_submit(pending)
+    if ready_line is not None:
+        return ready_line
+    if fd is None:
+        fd = sys.stdin.fileno()
+    readable, _, _ = select.select([fd], [], [], timeout)
+    if not readable:
+        return None
+    chunk = os.read(fd, 1024)
+    if chunk == b"":
+        if pending:
+            text = _decode_submit_line(bytes(pending))
+            pending.clear()
+            return text
+        raise EOFError
+    pending.extend(chunk)
+    return _commit_submit(pending)
 
 
 def _write_reset() -> None:

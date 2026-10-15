@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import argparse
 import queue
-import select
 import sys
 
 from .agent import Agent, AgentUI
@@ -221,9 +220,16 @@ def _next_console_line(chats: queue.Queue) -> str:
 
     A look capture arrives as ``(shown, body)``. The console prints ``shown``
     and the agent receives ``body``, which may include the front app.
+
+    Enter is CR on macOS Terminal. Both CR and LF submit. ``prepare_console``
+    turns ICRNL back on first so the tty does not echo a literal ``^M``.
     """
+    from .terminal import poll_submit_line, prepare_console
+
+    prepare_console()
     sys.stdout.write("❯ ")
     sys.stdout.flush()
+    pending = bytearray()
     while True:
         try:
             eyed = chats.get_nowait()
@@ -240,15 +246,12 @@ def _next_console_line(chats: queue.Queue) -> str:
                 return body.strip()
             return body
         try:
-            ready, _, _ = select.select([sys.stdin], [], [], 0.2)
+            line = poll_submit_line(pending, 0.2)
         except (OSError, ValueError):
             return input().strip()
-        if not ready:
+        if line is None:
             continue
-        line = sys.stdin.readline()
-        if line == "":
-            raise EOFError
-        return line.strip()
+        return line
 
 
 def _autosave(agent: Agent) -> None:
@@ -321,6 +324,7 @@ def _shutdown_browser() -> None:
 def main(argv: list[str] | None = None) -> None:
     from .terminal import install, restore
 
+    # Before Textual, iheye, or console input. This is the shell's termios.
     install()
     try:
         _main(argv)

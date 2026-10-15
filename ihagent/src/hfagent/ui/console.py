@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import json
 import queue
-import select
 import sys
 import time
 
@@ -127,8 +126,12 @@ class ConsoleUI(AgentUI):
 
 def _approval_from_eye_or_stdin(box: queue.Queue, timeout: float = 600.0) -> bool | None:
     """y/N from the keyboard or from the iheye card. None falls back to input()."""
+    from ..terminal import poll_submit_line, prepare_console
+
+    prepare_console()
     sys.stdout.write("run this? [y/N] ")
     sys.stdout.flush()
+    pending = bytearray()
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
         try:
@@ -140,16 +143,14 @@ def _approval_from_eye_or_stdin(box: queue.Queue, timeout: float = 600.0) -> boo
             sys.stdout.flush()
             return yes
         try:
-            ready, _, _ = select.select([sys.stdin], [], [], 0.15)
-        except (OSError, ValueError):
-            return None
-        if not ready:
-            continue
-        try:
-            line = sys.stdin.readline()
+            line = poll_submit_line(pending, 0.15)
         except (EOFError, KeyboardInterrupt):
             sys.stdout.write("\n")
             return False
+        except (OSError, ValueError):
+            return None
+        if line is None:
+            continue
         if line == "":
             return False
         return line.strip().lower() in ("y", "yes")

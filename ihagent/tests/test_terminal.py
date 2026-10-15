@@ -2,12 +2,15 @@
 
 from __future__ import annotations
 
+import os
+import queue
 import signal
+import termios
 from types import SimpleNamespace
 
 import pytest
 
-from hfagent.cli import main
+from hfagent.cli import _next_console_line, main
 from hfagent.terminal import reset_sequence
 from hfagent.ui.tui import run_tui
 import hfagent.terminal as terminal
@@ -38,7 +41,15 @@ def test_reset_sequence_disables_sgr_mouse_after_leaving_alt_screen():
 
 def test_restore_writes_reset_and_termios_once(fresh, monkeypatch):
     written: list[tuple[int, bytes]] = []
-    saved = [0, 1, 2, 3, 4, 5, 6]
+    saved = [
+        termios.ICRNL,
+        1,
+        2,
+        termios.ICANON | termios.ECHO | termios.ISIG,
+        4,
+        5,
+        [6],
+    ]
     seen: dict = {}
 
     def write(fd, data):
@@ -172,6 +183,113 @@ def test_main_restores_when_startup_crashes(monkeypatch):
     assert calls[0] == "install"
     assert "restore" in calls
     assert calls.index("restore") < calls.index("stop-mcp")
+
+
+def test_split_submit_line_accepts_cr_lf_and_crlf():
+    assert terminal.split_submit_line(b"what is the color of the sky\r") == (
+        b"what is the color of the sky",
+        b"",
+    )
+    assert terminal.split_submit_line(b"hello\n") == (b"hello", b"")
+    assert terminal.split_submit_line(b"hello\r\nnext") == (b"hello", b"next")
+    assert terminal.split_submit_line(b"ab\rcd\n") == (b"ab", b"cd\n")
+    assert terminal.split_submit_line(b"no-break") == (None, b"no-break")
+
+
+def test_capture_keeps_the_pre_raw_snapshot(fresh, monkeypatch):
+    master, slave = os.openpty()
+    try:
+        monkeypatch.setattr(terminal, "_tty_fd", lambda: slave)
+        terminal._capture()
+        assert terminal._saved_attrs is not None
+        assert terminal._saved_attrs[0] & termios.ICRNL
+        assert terminal._saved_attrs[3] & termios.ICANON
+        raw = terminal._copy_attrs(terminal._saved_attrs)
+        raw[0] &= ~termios.ICRNL
+        raw[3] &= ~(termios.ICANON | termios.ECHO)
+        termios.tcsetattr(slave, termios.TCSANOW, raw)
+        terminal._capture()
+        assert terminal._saved_attrs[0] & termios.ICRNL
+        assert terminal._saved_attrs[3] & termios.ICANON
+
+        terminal.prepare_console()
+        assert terminal._restored is False
+        now = termios.tcgetattr(slave)
+        assert now[0] & termios.ICRNL
+        assert now[3] & termios.ICANON
+        assert now[3] & termios.ECHO
+
+        terminal.restore()
+        done = termios.tcgetattr(slave)
+        assert done[0] & termios.ICRNL
+        assert done[3] & termios.ICANON
+        assert done[3] & termios.ECHO
+    finally:
+        os.close(master)
+        os.close(slave)
+
+
+def test_restore_does_not_write_back_a_raw_snapshot(fresh, monkeypatch):
+    master, slave = os.openpty()
+    try:
+        monkeypatch.setattr(terminal, "_tty_fd", lambda: slave)
+        monkeypatch.setattr(terminal.os, "write", lambda fd, data: len(data))
+        raw = terminal._copy_attrs(termios.tcgetattr(slave))
+        raw[0] &= ~termios.ICRNL
+        raw[3] &= ~(termios.ICANON | termios.ECHO)
+        terminal._saved_attrs = raw
+        terminal._saved_fd = slave
+        terminal.restore()
+        done = termios.tcgetattr(slave)
+        assert done[0] & termios.ICRNL
+        assert done[3] & termios.ICANON
+        assert done[3] & termios.ECHO
+        assert terminal._saved_attrs[0] & termios.ICRNL == 0
+    finally:
+        os.close(master)
+        os.close(slave)
+
+
+def test_console_line_submits_on_cr_and_lf_when_icrnl_is_off(fresh, monkeypatch):
+    master, slave = os.openpty()
+    try:
+        mode = termios.tcgetattr(slave)
+        mode[0] &= ~termios.ICRNL
+        mode[3] &= ~termios.ICANON
+        termios.tcsetattr(slave, termios.TCSANOW, mode)
+        os.write(master, b"what is the color of the sky\r")
+        pending = bytearray()
+        assert terminal.poll_submit_line(pending, 1.0, fd=slave) == (
+            "what is the color of the sky"
+        )
+        os.write(master, b"blue\n")
+        assert terminal.poll_submit_line(pending, 1.0, fd=slave) == "blue"
+    finally:
+        os.close(master)
+        os.close(slave)
+
+
+def test_next_console_line_submits_on_cr(fresh, monkeypatch):
+    master, slave = os.openpty()
+    try:
+        mode = termios.tcgetattr(slave)
+        mode[0] &= ~termios.ICRNL
+        mode[3] &= ~termios.ICANON
+        termios.tcsetattr(slave, termios.TCSANOW, mode)
+        os.write(master, b"what is the color of the sky\r")
+        monkeypatch.setattr(terminal, "_tty_fd", lambda: None)
+
+        class _Stdin:
+            encoding = "utf-8"
+
+            def fileno(self) -> int:
+                return slave
+
+        monkeypatch.setattr("sys.stdin", _Stdin())
+        assert _next_console_line(queue.Queue()) == "what is the color of the sky"
+    finally:
+        os.close(master)
+        os.close(slave)
 
 
 def test_run_tui_restores_on_quit_and_on_ctrl_c(monkeypatch):
