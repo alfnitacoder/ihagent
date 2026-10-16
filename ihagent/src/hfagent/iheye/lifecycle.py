@@ -11,6 +11,8 @@ from collections.abc import Callable
 def pid_alive(pid: int) -> bool:
     if pid <= 0:
         return False
+    if os.name == "nt":
+        return _windows_pid_alive(pid)
     try:
         os.kill(pid, 0)
     except ProcessLookupError:
@@ -20,6 +22,26 @@ def pid_alive(pid: int) -> bool:
     except OSError:
         return False
     return True
+
+
+def _windows_pid_alive(pid: int) -> bool:
+    """``os.kill(pid, 0)`` is not a live-process probe on Windows."""
+    import ctypes
+    from ctypes import wintypes
+
+    PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
+    STILL_ACTIVE = 259
+    kernel = ctypes.WinDLL("kernel32", use_last_error=True)
+    handle = kernel.OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, False, int(pid))
+    if not handle:
+        return False
+    try:
+        code = wintypes.DWORD()
+        if not kernel.GetExitCodeProcess(handle, ctypes.byref(code)):
+            return False
+        return int(code.value) == STILL_ACTIVE
+    finally:
+        kernel.CloseHandle(handle)
 
 
 def helper_should_exit(*, quit_requested: bool, parent_alive: bool) -> bool:

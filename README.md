@@ -2,7 +2,7 @@
 
 IHAgent is a terminal coding agent from InnovatelHub Solutions Ltd. The command is `ihagent` (the same program is also installed as `hfagent`). It runs a tool-calling loop — thought, action, observation — against any OpenAI-compatible chat API. It can read, search, and edit files, run shell and SSH commands, search and drive a dedicated Chrome window, and call tools from Model Context Protocol servers.
 
-On a real terminal the default interface is a Textual TUI. `--console` is the line REPL, and `-p` runs one prompt and exits. On macOS, a floating iheye bubble stays above other apps while the terminal that hosts ihagent is in the background.
+On a real terminal the default interface is a Textual TUI. `--console` is the line REPL, and `-p` runs one prompt and exits. A floating iheye bubble stays above other apps while the terminal that hosts ihagent is in the background. It is on by default on macOS. On Windows and Linux, turn it on with `HFAGENT_IHEYE=1` or `/iheye on`.
 
 Package `hfagent` 0.4.0, Python 3.10+, license MIT (declared in `ihagent/pyproject.toml`). Sources live in [`ihagent/src/hfagent`](ihagent/src/hfagent).
 
@@ -37,9 +37,9 @@ The screenshot is a live session on Ollama Cloud (`host` label `cloud`, device `
 
 ## Installation
 
-Python 3.10 through 3.13. Python 3.12 is the one to use. A newer interpreter (for example 3.15) may be missing wheels for Playwright and, on macOS, PyObjC. The installers create a `.venv` in the repository, install the `browser` extra, and on macOS the `iheye` extra. macOS and Linux then run `python -m playwright install chromium`. Windows runs `.venv\Scripts\python -m playwright install chrome`. They write `~/.hfagent/.env` when that file is absent, and put `ihagent` on `PATH`. An existing `~/.hfagent/.env` is never overwritten.
+Python 3.10 through 3.13. Python 3.12 is the one to use. A newer interpreter (for example 3.15) may be missing wheels for Playwright, PyObjC on macOS, or PySide6 on Windows and Linux. The installers create a `.venv` in the repository and install the `browser` and `iheye` extras. macOS and Linux then run `python -m playwright install chromium`. Windows runs `.venv\Scripts\python -m playwright install chrome`. They write `~/.hfagent/.env` when that file is absent, and put `ihagent` on `PATH`. An existing `~/.hfagent/.env` is never overwritten.
 
-`iheye` is macOS-only (PyObjC). Linux and Windows install `ihagent[browser]` and leave that extra off.
+`iheye` installs PyObjC on macOS and PySide6 everywhere else. `./install.sh --no-iheye` and `install.ps1 -NoIheye` skip that extra. The bubble is on by default only on macOS; Windows and Linux still need `HFAGENT_IHEYE=1` or `/iheye on`.
 
 The user file, when the installer creates it:
 
@@ -85,7 +85,7 @@ Use `python3.12` when that command exists. Any Python 3.10–3.13 works (`python
 
 ### Linux
 
-Same installer. The `iheye` extra is skipped.
+Same installer. It installs `ihagent[browser,iheye]` (PySide6). `--no-iheye` leaves the bubble extra out.
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/alfnitacoder/ihagent/master/install.sh | bash
@@ -100,7 +100,7 @@ git clone https://github.com/alfnitacoder/ihagent.git
 cd ihagent
 python3.12 -m venv .venv
 source .venv/bin/activate
-python -m pip install -e "ihagent[browser]"
+python -m pip install -e "ihagent[browser,iheye]"
 python -m playwright install chromium
 mkdir -p ~/.hfagent
 test -f ~/.hfagent/.env || cat > ~/.hfagent/.env <<'EOF'
@@ -119,7 +119,7 @@ ihagent
 irm https://raw.githubusercontent.com/alfnitacoder/ihagent/master/install.ps1 | iex
 ```
 
-`py -3.12` is used when the Python install manager has it. The script activates `.venv\Scripts\Activate.ps1`, installs `ihagent[browser]` with double quotes, and runs `.venv\Scripts\python -m playwright install chrome`. `playwright` itself is not on `PATH` outside the venv. `ihagent.cmd` and `hfagent.cmd` shims are written to `%USERPROFILE%\.local\bin`, and that directory is added to the user `PATH` (open a new terminal afterwards).
+`py -3.12` is used when the Python install manager has it. The script activates `.venv\Scripts\Activate.ps1`, installs `ihagent[browser,iheye]` with double quotes (PySide6 for the bubble; `-NoIheye` skips it), and runs `.venv\Scripts\python -m playwright install chrome`. `playwright` itself is not on `PATH` outside the venv. `ihagent.cmd` and `hfagent.cmd` shims are written to `%USERPROFILE%\.local\bin`, and that directory is added to the user `PATH` (open a new terminal afterwards).
 
 If a downloaded `install.ps1` or `Activate.ps1` will not run:
 
@@ -137,7 +137,7 @@ git clone https://github.com/alfnitacoder/ihagent.git
 cd ihagent
 py -3.12 -m venv .venv
 .\.venv\Scripts\Activate.ps1
-python -m pip install -e "ihagent[browser]"
+python -m pip install -e "ihagent[browser,iheye]"
 .\.venv\Scripts\python -m playwright install chrome
 New-Item -ItemType Directory -Force -Path "$env:USERPROFILE\.hfagent" | Out-Null
 if (-not (Test-Path "$env:USERPROFILE\.hfagent\.env")) {
@@ -160,14 +160,14 @@ Manual steps in cmd.exe. cmd does not treat single quotes as quotes, so the bash
 'ihagent[browser,iheye]' is not a valid editable requirement
 ```
 
-Use double quotes, and do not pass `iheye` (macOS only):
+Use double quotes. `iheye` on Windows installs PySide6:
 
 ```cmd
 git clone https://github.com/alfnitacoder/ihagent.git
 cd ihagent
 py -3.12 -m venv .venv
 .venv\Scripts\activate.bat
-python -m pip install -e "ihagent[browser]"
+python -m pip install -e "ihagent[browser,iheye]"
 .venv\Scripts\python -m playwright install chrome
 mkdir "%USERPROFILE%\.hfagent"
 notepad "%USERPROFILE%\.hfagent\.env"
@@ -179,9 +179,9 @@ Create `%USERPROFILE%\.hfagent\.env` only when it is not already there. The four
 ### Install troubleshooting
 
 - **`playwright` is not recognized**, or **`playwright: command not found`**. The console script lives inside the venv and is not on `PATH` until that venv is active. Activate it (`source .venv/bin/activate`, `.venv\Scripts\Activate.ps1`, or `.venv\Scripts\activate.bat`), or skip the command and call the venv Python: `python -m playwright install chromium`. On Windows that is `.venv\Scripts\python -m playwright install chrome`.
-- **`iheye` fails to install, or PyObjC will not build, on Linux or Windows.** `iheye` is macOS-only. Install `ihagent[browser]` on Linux and Windows. On macOS, `ihagent[browser,iheye]`.
+- **`iheye` fails to install.** On macOS that extra is PyObjC. On Windows and Linux it is PySide6 (`PySide6>=6.6`). Install `ihagent[browser,iheye]`, or `ihagent[iheye-qt]` when you only want the Qt bubble. `--no-iheye` / `-NoIheye` skips it.
 - **Python 3.15, or anything newer than 3.13.** Too new for some wheels. Install Python 3.12 and recreate the venv (`python3.12 -m venv .venv`, or `py -3.12 -m venv .venv`).
-- **`ModuleNotFoundError: hfagent.cli`** (also `No module named 'hfagent.cli'`). The `ihagent` on `PATH` is not the venv that has the package. Reinstall with that venv's Python: `.venv/bin/python -m pip install -e "ihagent[browser]"` (macOS: `"ihagent[browser,iheye]"`). On Windows: `.venv\Scripts\python -m pip install -e "ihagent[browser]"`.
+- **`ModuleNotFoundError: hfagent.cli`** (also `No module named 'hfagent.cli'`). The `ihagent` on `PATH` is not the venv that has the package. Reinstall with that venv's Python: `.venv/bin/python -m pip install -e "ihagent[browser,iheye]"`. On Windows: `.venv\Scripts\python -m pip install -e "ihagent[browser,iheye]"`.
 
 ## Install and quick start
 
@@ -195,7 +195,7 @@ playwright install chrome
 ihagent
 ```
 
-`browser` installs Playwright. `iheye` installs PyObjC on macOS (`pyobjc-framework-Cocoa`, plus Quartz and Vision for a one-shot screenshot and OCR). On other platforms that extra is empty and the overlay stays off. cmd.exe does not treat single quotes as quotes, so `pip install -e 'ihagent[browser,iheye]'` there fails with `'ihagent[browser,iheye]' is not a valid editable requirement`. Use double quotes, and skip `iheye` off macOS: `pip install -e "ihagent[browser]"`. Tests use the `dev` extra: `pip install -e 'ihagent[dev,browser,iheye]'`.
+`browser` installs Playwright. `iheye` installs PyObjC on macOS (`pyobjc-framework-Cocoa`, plus Quartz and Vision for a one-shot screenshot and OCR) and PySide6 on Windows and Linux. `iheye-qt` is PySide6 on every platform. cmd.exe does not treat single quotes as quotes, so `pip install -e 'ihagent[browser,iheye]'` there fails with `'ihagent[browser,iheye]' is not a valid editable requirement`. Use double quotes: `pip install -e "ihagent[browser,iheye]"`. Tests use the `dev` extra: `pip install -e 'ihagent[dev,browser,iheye]'`.
 
 One prompt, or the line REPL:
 
@@ -315,7 +315,7 @@ The first source that sets a value wins. `ihagent --show-config` and `/config` p
 | `HFAGENT_BROWSER_EXECUTABLE` | auto | Chrome binary path. Skips channel detection. |
 | `HFAGENT_BROWSER_TIMEOUT_MS` | `30000` | Navigation and action timeout (minimum 1000). |
 | `HFAGENT_BROWSER_MAX_CHARS` | `6000` | Cap for `browser_read` and snapshots (500–12000). |
-| `HFAGENT_IHEYE` | on for macOS, off elsewhere | `0` / `off` disables the bubble. `/iheye on` and `/iheye off` persist it in `~/.hfagent/.env`. |
+| `HFAGENT_IHEYE` | on for macOS, off elsewhere | `1` / `on` shows the bubble on Windows and Linux too. `0` / `off` disables it. `/iheye on` and `/iheye off` persist it in `~/.hfagent/.env`. |
 | `HFAGENT_IHEYE_TRACK` | on | `0` / `off` stops the pupil following the pointer and keyboard glances. |
 | `HFAGENT_IHEYE_SUMMARY` | on | `0` / `off` hides the completion card. The y/N card still shows. |
 | `HFAGENT_IHEYE_SKIN` | `bot` | `bot`, `grok` (alias `face`), `classic`, or `robot`. Read when the helper starts. |
@@ -558,13 +558,27 @@ Only the names in `"tools"` are registered when that list is set. `"maxTools"` k
 
 ![iheye bot skin: a small white robot with cyan eyes and an energy ring, floating above other windows](docs/images/iheye-bot.png)
 
-On macOS, ihagent starts a small always-on-top **iheye** bubble in a helper process (`python -m hfagent.iheye`). The bubble hides while the terminal that is running ihagent is focused, and it shows when you switch to another app. Clicking the bubble brings that terminal forward. You can drag it. The position is saved in `~/.hfagent/iheye-position.json`, including which display it was on, and restored next launch. The first launch sits at the top-right of the main display. A later launch puts it back on the display that held it, including one to the left or below (those origins are negative). If that display has been unplugged, it comes back on the display under the pointer, or the main display. The hover chat, the summary card, and the approval card open on the bubble's own display. They sit under the bubble, and flip above or toward the left when that would leave the display. The helper uses a borderless, non-activating floating panel on all Spaces, watches the parent pid, and exits when ihagent exits.
+ihagent starts a small always-on-top **iheye** bubble in a helper process (`python -m hfagent.iheye`). The bubble hides while the terminal that is running ihagent is focused, and it shows when you switch to another app. Clicking the bubble brings that terminal forward. You can drag it. The position is saved in `~/.hfagent/iheye-position.json`, including which display it was on, and restored next launch. The first launch sits at the top-right of the main display. A later launch puts it back on the display that held it, including one to the left or below (those origins are negative). If that display has been unplugged, it comes back on the display under the pointer, or the main display. The hover chat, the summary card, and the approval card open on the bubble's own display. They sit under the bubble, and flip above or toward the left when that would leave the display. The helper watches the parent pid and exits when ihagent exits.
+
+macOS keeps the PyObjC panel (borderless, non-activating, all Spaces) and paints in `drawRect_`. Windows and Linux use a frameless, translucent, always-on-top Qt window and paint the same skins with QPainter. Install with `pip install -e "ihagent[browser,iheye]"` (PySide6 is selected automatically off macOS; `ihagent[iheye-qt]` is the Qt extra on its own). Then:
+
+```bash
+# Windows PowerShell or Linux. macOS is already on unless you turned it off.
+export HFAGENT_IHEYE=1          # PowerShell: $env:HFAGENT_IHEYE = "1"
+ihagent
+# or, inside the session:
+/iheye on
+```
+
+Unset `HFAGENT_IHEYE` still means on for macOS only. On Windows the foreground window comes from `GetForegroundWindow` and `GetWindowThreadProcessId`, compared with the terminal's process tree and console window, including Windows Terminal. On X11 the helper asks `xdotool` or EWMH. On Wayland, where those tools cannot see the focused window, the bubble stays visible. `Ctrl+Alt+I` toggles it when the desktop delivers that hotkey (Windows registers it; a Wayland session that cannot is left visible).
+
+A hover question that asks about the screen captures the foreground window once, and only then. Windows takes that picture with a window grab, not a background screenshot. The helper never captures while it is only deciding whether to show the bubble.
 
 Terminal.app and iTerm2 hide the bubble only when the ihagent window or tab is the focused one (matched by tty). Warp, VS Code, Cursor, Ghostty, kitty, WezTerm, Alacritty, and Hyper hide it whenever that app is frontmost.
 
 ### Skins
 
-The default skin is a small robot (`HFAGENT_IHEYE_SKIN=bot`), the one in the picture. Glossy white head and body, a black glass face, cyan LED eyes and mouth, glowing ear rings, a lit antenna, and an energy ring underneath. It is painted in `drawRect_` with Core Graphics. The view does not host a layer tree. Clicks outside the robot fall through.
+The default skin is a small robot (`HFAGENT_IHEYE_SKIN=bot`), the one in the picture. Glossy white head and body, a black glass face, cyan LED eyes and mouth, glowing ear rings, a lit antenna, and an energy ring underneath. macOS paints it in `drawRect_` with Core Graphics and does not host a layer tree. Windows and Linux paint the same draw list with QPainter. Clicks outside the robot fall through.
 
 | Skin | `HFAGENT_IHEYE_SKIN` | What it is |
 | :--- | :--- | :--- |
@@ -608,7 +622,7 @@ When a turn finishes and the bubble is visible, a card under the bubble shows th
 
 The eyes follow the pointer anywhere on the screen (`NSEvent.mouseLocation`). That needs no extra permission. A key-down in another app makes the robot glance and blink for a short moment. The handler records only that a key went down. It does not read which key, and it does not write keystrokes to `~/.hfagent/iheye.log`.
 
-The overlay is on by default on macOS and off elsewhere. It starts with the TUI, the line REPL, and `-p`. `--show-config` and `--version` do not start it. `ihagent --show-config` and `/config` include `iheye`, `iheye_track`, `iheye_summary`, `iheye_skin`, `iheye_look`, and whether PyObjC is installed. `~/.hfagent/iheye.log` is replaced on each launch.
+The overlay is on by default on macOS and off elsewhere until `/iheye on`. It starts with the TUI, the line REPL, and `-p`. `--show-config` and `--version` do not start it. `ihagent --show-config` and `/config` include `iheye`, `iheye_track`, `iheye_summary`, `iheye_skin`, `iheye_look`, and the backend (`pyobjc` or `qt`, and whether that library is installed). `~/.hfagent/iheye.log` is replaced on each launch. `HFAGENT_IHEYE_REDUCE_MOTION=1` holds the pose on every platform. macOS Reduce Motion does the same when the variable is unset.
 
 ```bash
 pip install -e 'ihagent[browser,iheye]'
@@ -728,7 +742,7 @@ A dedicated Hugging Face GPU endpoint is a different host. `scripts/setup-huggin
 | `/config` | Effective settings and the source of each. |
 | `/browser [close]` | Chrome status, or close the window. |
 | `/mcp` | List MCP servers, status, and tool counts. Subcommands: `add`, `remove`, `login`, `tools`, `reload`, `enable`, `disable`. |
-| `/iheye [on\|off]` | macOS floating bubble. `track on\|off`, `summary on\|off`, and `look on\|off` toggle gaze, the completion card, and one-shot capture. |
+| `/iheye [on\|off]` | Floating bubble on macOS, Windows, and Linux. `track on\|off`, `summary on\|off`, and `look on\|off` toggle gaze, the completion card, and one-shot capture. |
 | `/memory` | Show long-term memory. |
 | `/forget` | Wipe long-term memory. |
 | `/skills` | List coding skills. |
@@ -747,9 +761,9 @@ A dedicated Hugging Face GPU endpoint is a different host. `scripts/setup-huggin
 | Message | What to do |
 | :--- | :--- |
 | `playwright` is not recognized, or `playwright: command not found` | The console script is inside the venv. Activate `.venv`, or run `python -m playwright`. On Windows: `.venv\Scripts\python -m playwright install chrome`. See [Install troubleshooting](#install-troubleshooting). |
-| `ModuleNotFoundError: hfagent.cli` | The `ihagent` on `PATH` is not the venv that has the package. Reinstall with that venv's Python: `.venv/bin/python -m pip install -e "ihagent[browser]"` (macOS: add `,iheye`). On Windows: `.venv\Scripts\python -m pip install -e "ihagent[browser]"`. |
+| `ModuleNotFoundError: hfagent.cli` | The `ihagent` on `PATH` is not the venv that has the package. Reinstall with that venv's Python: `.venv/bin/python -m pip install -e "ihagent[browser,iheye]"`. On Windows: `.venv\Scripts\python -m pip install -e "ihagent[browser,iheye]"`. |
 | Python 3.15, or newer than 3.13 | Some wheels are missing. Use Python 3.12 (`python3.12`, or `py -3.12`). |
-| `'ihagent[browser,iheye]' is not a valid editable requirement` | cmd.exe does not treat single quotes as quotes. Use double quotes, and skip `iheye` off macOS: `pip install -e "ihagent[browser]"`. |
+| `'ihagent[browser,iheye]' is not a valid editable requirement` | cmd.exe does not treat single quotes as quotes. Use double quotes: `pip install -e "ihagent[browser,iheye]"`. |
 | `No API key found.` | For the Hugging Face router, `export HF_TOKEN=...` or start the TUI and paste `/model_api=...`. `HF_API_KEY` and `HFAGENT_API_KEY` are also read. |
 | `No Ollama API key found.` | For `https://ollama.com`, set `OLLAMA_API_KEY` or paste `/model_api=...`. |
 | `No Ollama model found.` | `ollama serve`, then `ollama list`, or `ihagent --ollama <model>`. |
@@ -777,9 +791,10 @@ A dedicated Hugging Face GPU endpoint is a different host. `scripts/setup-huggin
 | `stopped` | You typed `stop` while a turn was running. |
 | `api key saved` | `/model_api=` accepted the key (at least 8 characters, no spaces) and wrote the project `.env`. |
 | `35;62;59M` (or similar) after exit | SGR mouse reports left on by a killed process or an older build. Run `reset` in that shell. A current ihagent turns mouse mode off on the way out. See [Terminal restore](#terminal-restore). |
-| `iheye only runs on macOS` | Expected off Darwin. `/iheye on` still saves `HFAGENT_IHEYE=1` for a later Mac. |
+| `iheye off. /iheye on to show it` | Windows and Linux leave the bubble off until you enable it. `/iheye on` saves `HFAGENT_IHEYE=1`. |
 | `iheye off (HFAGENT_IHEYE=0). /iheye on to show it` | The bubble was turned off. `/iheye on`, or unset `HFAGENT_IHEYE` on macOS. |
-| `iheye needs PyObjC. pip install 'hfagent[iheye]'` | The `iheye` extra is missing. From this repo: `pip install -e 'ihagent[browser,iheye]'`. |
+| `iheye needs PyObjC. pip install 'hfagent[iheye]'` | The macOS extra is missing. From this repo: `pip install -e 'ihagent[browser,iheye]'`. |
+| `iheye needs PySide6. pip install 'hfagent[iheye]'` | The Windows/Linux extra is missing. Same install, or `pip install 'hfagent[iheye-qt]'`. |
 | `pip install 'hfagent[iheye]'` | The helper process could not import AppKit. Same install as above. |
 | `iheye helper exited` | The overlay process quit during startup. Read `~/.hfagent/iheye.log` (replaced on each launch). |
 | `iheye failed to start: …` | The helper could not be spawned. The message includes the OS error. |
@@ -808,7 +823,7 @@ cd ihagent
 pytest
 ```
 
-An editable install from `ihagent/` itself is `pip install -e '.[dev,browser,iheye]'`. The suite covers the agent loop, config precedence, `/url` and fallback, context compaction, reasoning display, browser approvals, the TUI helpers, MCP (in-process stdio server), terminal restore, and iheye focus, hover, summary, skins, and supervisor rules. Those iheye tests do not open AppKit. The overlay itself runs only on macOS. The suite does not launch a live model or a live browser.
+An editable install from `ihagent/` itself is `pip install -e '.[dev,browser,iheye]'`. The suite covers the agent loop, config precedence, `/url` and fallback, context compaction, reasoning display, browser approvals, the TUI helpers, MCP (in-process stdio server), terminal restore, and iheye focus, hover, summary, skins, supervisor rules, and the Qt backend selection. Those tests do not open AppKit. With PySide6 installed they also rasterize each skin offscreen (`QT_QPA_PLATFORM=offscreen`). The suite does not launch a live model or a live browser.
 
 ```text
 .
@@ -821,7 +836,7 @@ An editable install from `ihagent/` itself is `pip install -e '.[dev,browser,ihe
 ├── public/
 ├── .hfagent/skills/                   # project skills for this repo
 └── ihagent/
-    ├── pyproject.toml                 # package hfagent; extras browser, iheye, dev
+    ├── pyproject.toml                 # package hfagent; extras browser, iheye, iheye-qt, dev
     ├── README.md                      # short pointer back here
     ├── examples/mcp.json              # preset mcpServers, placeholders only
     ├── scripts/                       # setup-machine, setup-huggingface, serve-local
@@ -836,7 +851,7 @@ An editable install from `ihagent/` itself is `pip install -e '.[dev,browser,ihe
         ├── reasoning.py               # <think> and reasoning fields
         ├── terminal.py                # mouse-mode and termios restore on exit
         ├── browser.py                 # dedicated Chrome
-        ├── iheye/                     # macOS floating overlay (bot, grok, classic, robot)
+        ├── iheye/                     # floating overlay: PyObjC on macOS, Qt on Windows and Linux
         ├── mcp/                       # MCP client, oauth, ~/.hfagent/mcp.json
         ├── tools/                     # files, shell, ssh, memory, browser
         ├── ui/                        # Textual TUI and Rich console

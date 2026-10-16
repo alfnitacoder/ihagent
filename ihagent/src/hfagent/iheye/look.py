@@ -14,6 +14,7 @@ import base64
 import os
 import re
 import subprocess
+import sys
 from dataclasses import dataclass, replace
 from pathlib import Path
 
@@ -710,6 +711,43 @@ def _shrink_screenshot(path: str) -> None:
         )
     except (OSError, subprocess.SubprocessError):
         return
+
+
+def capture_explicit_window(
+    *,
+    requested: bool,
+    hwnd: int,
+    pid: int,
+    title: str,
+    host: HostInfo,
+    helper_pid: int,
+    image_path: str,
+    grab,
+) -> LookCapture | None:
+    """Screenshot one window after a hover send asked for it.
+
+    ``requested`` is the result of :func:`should_capture`. When it is false
+    this returns None and does not call ``grab``, so a focus poll cannot
+    take a picture by accident. ``hwnd`` 0 is not the whole desktop.
+    """
+    if not requested:
+        return None
+    app = str(title or "")
+    handle = int(hwnd or 0)
+    if handle <= 0:
+        return LookCapture(app=app, skipped="no-window", source="window")
+    target = FrontTarget(pid=int(pid or 0), name=app, bundle_id="")
+    if is_own_terminal(target, host, helper_pid):
+        return LookCapture(app=app, skipped="own-terminal", source="skipped")
+    shot = grab(handle, image_path)
+    if not isinstance(shot, ShotResult):
+        shot = ShotResult(False, "bad screenshot result", 0)
+    problem = interpret_screenshot(shot)
+    if sys.platform != "darwin" and problem:
+        problem = "iheye: could not capture that window."
+    if problem or not shot.ok:
+        return LookCapture(app=app, title=app, hint=problem, source="window")
+    return LookCapture(app=app, title=app, image=image_path, source="window")
 
 
 def capture_front_native(

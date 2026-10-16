@@ -387,18 +387,21 @@ def test_helper_command_and_argv_roundtrip():
     assert restored.tty == "/dev/ttys005"
 
 
-def test_helper_main_is_a_noop_off_macos(monkeypatch):
+def test_helper_main_hints_when_qt_is_missing(monkeypatch, capsys):
     monkeypatch.setattr("hfagent.iheye.__main__.sys.platform", "linux")
+    monkeypatch.setattr("hfagent.iheye.backend.qt_available", lambda: False)
     assert (
         helper_main(
             ["--parent-pid", "1", "--socket", "/tmp/iheye.sock", "--position", "/tmp/pos.json"]
         )
         == 0
     )
+    assert "hfagent[iheye]" in capsys.readouterr().err
 
 
-def test_start_is_a_noop_when_disabled_or_not_macos(monkeypatch, tmp_path):
+def test_start_is_a_noop_when_disabled_or_qt_is_missing(monkeypatch, tmp_path):
     calls = []
+    monkeypatch.setattr("hfagent.iheye.backend.qt_available", lambda: False)
     monkeypatch.setattr(
         "hfagent.iheye.supervisor.subprocess.Popen",
         lambda *args, **kwargs: calls.append(args),
@@ -419,7 +422,8 @@ def test_start_is_a_noop_when_disabled_or_not_macos(monkeypatch, tmp_path):
         control=control,
         host=_host(),
     )
-    assert forced.reason == "not-macos"
+    assert forced.reason == "missing-pyside"
+    assert "PySide6" in forced.message
     assert calls == []
 
 
@@ -601,10 +605,11 @@ def test_iheye_command_persists_and_reports(monkeypatch, tmp_path):
     assert os.environ["HFAGENT_IHEYE"] == "0"
     assert "HFAGENT_IHEYE=0" in env_path.read_text(encoding="utf-8")
 
+    monkeypatch.setattr("hfagent.iheye.backend.qt_available", lambda: False)
     message = handle_command("on")
     assert "HFAGENT_IHEYE=1" in env_path.read_text(encoding="utf-8")
     assert os.environ["HFAGENT_IHEYE"] == "1"
-    assert "macOS" in message or message == "iheye on"
+    assert message == "iheye on" or "PySide6" in message or "PyObjC" in message or "macOS" in message
     assert handle_command("sideways") == "usage: /iheye on|off | track on|off | summary on|off | look on|off"
     monkeypatch.setenv("HFAGENT_IHEYE", "0")
     assert "HFAGENT_IHEYE=0" in status_text()

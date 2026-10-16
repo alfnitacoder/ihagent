@@ -57,12 +57,22 @@ def host_from_args(args: argparse.Namespace) -> HostInfo:
 
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
-    if sys.platform != "darwin":
-        print("iheye overlay is macOS-only", file=sys.stderr)
-        return 0
-    from .overlay_app import run_overlay
+    from .backend import INSTALL_QT_HINT, backend_name, qt_available
 
-    return int(run_overlay(args, host_from_args(args)) or 0)
+    kind = backend_name(sys.platform)
+    if kind == "pyobjc":
+        from .overlay_app import run_overlay
+
+        return int(run_overlay(args, host_from_args(args)) or 0)
+    if kind == "qt":
+        if not qt_available():
+            print(INSTALL_QT_HINT, file=sys.stderr)
+            return 0
+        from .qt_overlay import run_overlay
+
+        return int(run_overlay(args, host_from_args(args)) or 0)
+    print("iheye runs on macOS, Windows, and Linux", file=sys.stderr)
+    return 0
 
 
 if __name__ == "__main__":
