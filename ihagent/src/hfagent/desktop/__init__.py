@@ -47,7 +47,9 @@ def begin_task() -> None:
 
 def reset_for_tests() -> None:
     from .hotkey import stop_hotkey
+    from .overlay_host import reset_overlay
 
     stop_hotkey()
+    reset_overlay()
     _reset_session()
     set_controller(None)

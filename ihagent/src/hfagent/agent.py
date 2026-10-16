@@ -1491,7 +1491,15 @@ class Agent:
         except Exception:
             pass
         try:
-            return self.ui.approve(tool.name, args, preview)
+            ok = self.ui.approve(tool.name, args, preview)
+            if not ok:
+                abandon = getattr(tool, "abandon", None)
+                if callable(abandon):
+                    try:
+                        abandon(**args)
+                    except Exception:
+                        pass
+            return ok
         finally:
             try:
                 from .iheye import clear_approval

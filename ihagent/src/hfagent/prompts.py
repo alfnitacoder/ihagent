@@ -65,7 +65,9 @@ watch the screen in the background. Prefer mouse_elements, then pass
 that element's id to the click or type tool so the click hits its centre.
 If the list is empty or has no match, pass target and the tool may take
 one screenshot. Do not type into password fields. A declined confirmation
-stops that action.
+stops that action. When mouse control is on, an on-screen ihmouse pointer
+shows the target while the user confirms; you still use the mouse tools,
+and you do not move the system pointer yourself.
 
 Web UI quality is mandatory whenever you create or improve a web app:
 follow the frontend-design skill. Ship one clear aesthetic direction with

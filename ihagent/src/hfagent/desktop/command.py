@@ -7,11 +7,12 @@ import sys
 
 from ..config import mask_secret, source_of
 from .hotkey import start_hotkey, stop_hotkey
+from .overlay_host import hide_overlay, overlay_problem, overlay_requested, rearm_overlay
 from .session import get_session
 from .vision import current_chat, resolve_vision
 
 
-USAGE = "usage: /mouse on|off | approval per-action|per-task | log | stop"
+USAGE = "usage: /mouse on|off | overlay on|off | approval per-action|per-task | log | stop"
 
 
 def handle_command(arg: str) -> str:
@@ -26,7 +27,10 @@ def handle_command(arg: str) -> str:
         return _turn_off()
     if head == "stop":
         get_session().trip("user /mouse stop")
+        hide_overlay()
         return "mouse emergency stop. No further actions until /mouse on."
+    if head == "overlay":
+        return _overlay(rest)
     if head == "log":
         return _log_text()
     if head == "approval":
@@ -45,10 +49,14 @@ def status_text() -> str:
     vision = settings.model or "(unset — text model cannot look)"
     host = settings.base_url or "(current host)"
     approval = session.approval_mode()
+    overlay = "on" if overlay_requested() else "off"
     line = (
-        f"mouse on · approval {approval} · stop {session.hotkey_spec()} "
+        f"mouse on · overlay {overlay} · approval {approval} · stop {session.hotkey_spec()} "
         f"or a screen corner · vision {vision} @ {host}"
     )
+    problem = overlay_problem()
+    if problem and overlay_requested():
+        line = f"{line} · {problem}"
     if session.stopped:
         reason = session.stop_reason or "emergency stop"
         return f"{line} · EMERGENCY STOP ({reason}). /mouse on to resume."
@@ -74,6 +82,7 @@ def config_report_lines() -> list[str]:
         f"mouse={'on' if session.enabled() else 'off'}  [{src('HFAGENT_MOUSE', 'default')}]",
         f"mouse_approval={session.approval_mode()}  [{src('HFAGENT_MOUSE_APPROVAL', 'default')}]",
         f"mouse_stop_hotkey={session.hotkey_spec()}  [{src('HFAGENT_MOUSE_STOP_HOTKEY', 'default')}]",
+        f"mouse_overlay={'on' if overlay_requested() else 'off'}  [{src('HFAGENT_MOUSE_OVERLAY', 'default')}]",
         f"vision_model={settings.model or '(unset)'}  [{settings.model_source}]",
         f"vision_base_url={settings.base_url or '(current host)'}  [{settings.url_source}]",
         f"vision_api_key={key_shown}  [{settings.key_source}]",
@@ -87,6 +96,7 @@ def _turn_on() -> str:
     session = get_session()
     session.clear_stop()
     session.begin_task()
+    rearm_overlay()
     note = start_hotkey(session.hotkey_spec())
     if note:
         return f"mouse on. {note}"
@@ -100,8 +110,24 @@ def _turn_off() -> str:
     os.environ["HFAGENT_MOUSE"] = "0"
     _persist("HFAGENT_MOUSE", "0")
     stop_hotkey()
+    hide_overlay()
     get_session().clear_stop()
     return "mouse off. Nothing is watching the screen."
+
+
+def _overlay(rest: str) -> str:
+    if rest in {"", "status"}:
+        return f"mouse overlay {'on' if overlay_requested() else 'off'}"
+    if rest in {"on", "1", "true", "yes"}:
+        os.environ["HFAGENT_MOUSE_OVERLAY"] = "1"
+        _persist("HFAGENT_MOUSE_OVERLAY", "1")
+        return "mouse overlay on. The robot shows while mouse control is on."
+    if rest in {"off", "0", "false", "no"}:
+        os.environ["HFAGENT_MOUSE_OVERLAY"] = "0"
+        _persist("HFAGENT_MOUSE_OVERLAY", "0")
+        hide_overlay()
+        return "mouse overlay off. The system pointer still moves when you confirm an action."
+    return USAGE
 
 
 def _approval(rest: str) -> str:

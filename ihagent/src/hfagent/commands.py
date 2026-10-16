@@ -48,7 +48,7 @@ HELP = """\
 /browser [action] status of the ihagent Chrome, or close it
 /mcp              MCP servers (status, add, remove, login, tools, reload)
 /iheye [on|off|track|summary|look]  floating eye, hover chat, completion card (macOS)
-/mouse [on|off|approval|log|stop]  desktop pointer (off until you turn it on)
+/mouse [on|off|overlay|approval|log|stop]  desktop pointer and ihmouse overlay
 /forget           wipe long-term memory
 /cloud            use Ollama Cloud (saved for the next launch)
 /local            use Ollama on this PC (saved for the next launch)
