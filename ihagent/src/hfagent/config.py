@@ -56,6 +56,12 @@ _ALIASES = {
     "hfagent_iheye_summary": "HFAGENT_IHEYE_SUMMARY",
     "hfagent_iheye_skin": "HFAGENT_IHEYE_SKIN",
     "hfagent_iheye_look": "HFAGENT_IHEYE_LOOK",
+    "hfagent_mouse": "HFAGENT_MOUSE",
+    "hfagent_mouse_approval": "HFAGENT_MOUSE_APPROVAL",
+    "hfagent_mouse_stop_hotkey": "HFAGENT_MOUSE_STOP_HOTKEY",
+    "hfagent_vision_model": "HFAGENT_VISION_MODEL",
+    "hfagent_vision_base_url": "HFAGENT_VISION_BASE_URL",
+    "hfagent_vision_api_key": "HFAGENT_VISION_API_KEY",
 }
 
 # key -> (value in the process before we wrote it, value we wrote)
@@ -692,8 +698,17 @@ def format_config_report(config: "Config") -> str:
         lines.append(f"{name}={shown}  [{source}]")
     lines.extend(_browser_report_lines())
     lines.extend(_iheye_report_lines())
+    lines.extend(_mouse_report_lines())
     lines.extend(_mcp_report_lines())
     return "\n".join(lines)
+
+
+def _mouse_report_lines() -> list[str]:
+    try:
+        from .desktop import config_report_lines
+    except Exception:
+        return []
+    return config_report_lines()
 
 
 def _iheye_report_lines() -> list[str]:

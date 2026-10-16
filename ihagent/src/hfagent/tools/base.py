@@ -13,6 +13,8 @@ class Tool:
     description: str = ""
     parameters: dict[str, Any] = {}
     needs_approval: bool = False
+    # Desktop actions set this so they still ask when approval is ``auto``.
+    force_approval: bool = False
 
     def run(self, **kwargs: Any) -> str:
         raise NotImplementedError

@@ -557,6 +557,7 @@ class Agent:
         self.on_fallback = False
         # (base_url, api_key, model, api_key_var) captured when we leave primary.
         self.primary_target: tuple[str, str, str, str] | None = None
+        self._bind_desktop_chat()
 
     def retarget(
         self,
@@ -578,6 +579,7 @@ class Agent:
             timeout=120,
             max_retries=2,
         )
+        self._bind_desktop_chat()
         # Rebuild the system message for the new host (memory is host-aware:
         # omitted on Claude so its content filter does not reject the turn).
         if self.messages and self.messages[0].get("role") == "system":
@@ -586,6 +588,15 @@ class Agent:
                 "content": system_prompt(base_url),
             }
         self.device = "…"
+
+    def _bind_desktop_chat(self) -> None:
+        """Vision clicks default to this agent's host, model, and key."""
+        try:
+            from .desktop import bind_chat
+
+            bind_chat(lambda: (self.config.base_url, self.config.model, self.config.api_key))
+        except Exception:
+            pass
 
     def steer(self, text: str) -> None:
         """Queue a chat message while a turn is already running."""
@@ -704,6 +715,12 @@ class Agent:
             publish("done")
 
     def _run(self, user_input: str) -> str:
+        try:
+            from .desktop import begin_task
+
+            begin_task()
+        except Exception:
+            pass
         self._exchange_start = len(self.messages)
         if isinstance(user_input, str) and AFFIRMATION_RE.match(user_input.strip()):
             last_assistant = next(
@@ -1456,7 +1473,9 @@ class Agent:
             return bool(tool.needs_approval)
 
     def _approved(self, tool, args: dict) -> bool:
-        if self.config.approval == "auto":
+        # Mouse actions keep their own confirm even when approval is auto.
+        forced = bool(getattr(tool, "force_approval", False))
+        if self.config.approval == "auto" and not forced:
             return True
         from .iheye import publish
 
