@@ -2,7 +2,7 @@
 
 Python package for [IHAgent](../README.md) (InnovatelHub Solutions Ltd). The console commands are `ihagent` and `hfagent` (both `hfagent.cli:main`). Version 0.4.0.
 
-Install, hosts, configuration, slash commands, browser tools, MCP servers (including the Google Workspace preset), the macOS iheye overlay, Kaggle notes, and troubleshooting are in the [repository README](../README.md). This file used to duplicate that guide. An example `mcp.json` is in [`examples/mcp.json`](examples/mcp.json).
+Install, hosts, configuration, slash commands, browser tools, MCP servers (including the Google Workspace preset), the iheye overlay (macOS, Windows, and Linux), Kaggle notes, and troubleshooting are in the [repository README](../README.md). This file used to duplicate that guide. An example `mcp.json` is in [`examples/mcp.json`](examples/mcp.json).
 
 From this directory:
 
@@ -13,7 +13,7 @@ python3 -m venv .venv
 .venv/bin/ihagent
 ```
 
-`iheye` installs PyObjC on macOS (`pyobjc-framework-Cocoa`). The overlay does nothing on other platforms.
+`iheye` installs PyObjC on macOS and PySide6 on Windows and Linux. The bubble is on by default on macOS. Elsewhere set `HFAGENT_IHEYE=1` or run `/iheye on`.
 
 Tests:
 

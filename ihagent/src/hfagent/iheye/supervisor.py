@@ -18,6 +18,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from .appearance import STATES
+from .backend import backend_status
 from .host import HostInfo
 from .look import (
     accepts_look_context,
@@ -191,19 +192,9 @@ class EyeSupervisor:
             self.host = host
             self.status = EyeStatus(True, "started", "iheye on")
             return self.status
-        if self.platform_name != "darwin":
-            self.status = EyeStatus(
-                False,
-                "not-macos",
-                "iheye only runs on macOS",
-            )
-            return self.status
-        if not pyobjc_available():
-            self.status = EyeStatus(
-                False,
-                "missing-pyobjc",
-                f"iheye needs PyObjC. {INSTALL_HINT}",
-            )
+        ready, reason, message = backend_status(self.platform_name)
+        if not ready:
+            self.status = EyeStatus(False, reason, message)
             return self.status
         if self._proc is not None or self._thread is not None:
             self.stop()

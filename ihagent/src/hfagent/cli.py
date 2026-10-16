@@ -299,7 +299,7 @@ def _start_iheye() -> None:
         status = start_if_enabled()
     except Exception:
         return
-    if status.reason in {"missing-pyobjc", "helper-exited", "spawn-failed"} and status.message:
+    if status.reason in {"missing-pyobjc", "missing-pyside", "helper-exited", "spawn-failed"} and status.message:
         print(status.message, file=sys.stderr)
 
 

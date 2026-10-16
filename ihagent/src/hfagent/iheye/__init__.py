@@ -1,9 +1,10 @@
-"""Floating iheye bubble for macOS.
+"""Floating iheye bubble.
 
 While ihagent is running, a small always-on-top eye appears when the user
 switches to another app and hides when they come back to the terminal that
-is hosting ihagent. The bubble is a helper process; this module only supervises
-it and never imports AppKit.
+is hosting ihagent. macOS paints with PyObjC. Windows and Linux paint with
+PySide6. The bubble is a helper process; this module only supervises it and
+does not import AppKit or Qt.
 """
 
 from __future__ import annotations
@@ -177,8 +178,8 @@ def handle_command(arg: str) -> str:
         status = start_if_enabled()
         if status.running:
             return "iheye on"
-        if status.reason == "not-macos":
-            return "iheye only runs on macOS (saved HFAGENT_IHEYE=1)"
+        if status.reason == "unsupported":
+            return "iheye runs on macOS, Windows, and Linux (saved HFAGENT_IHEYE=1)"
         return status.message or "iheye on"
     if head == "off":
         os.environ["HFAGENT_IHEYE"] = "0"
@@ -243,10 +244,13 @@ def status_text() -> str:
     if not enabled_from_env():
         raw = os.environ.get("HFAGENT_IHEYE", "")
         if str(raw).strip() == "" and sys.platform != "darwin":
-            return "iheye only runs on macOS"
+            return "iheye off. /iheye on to show it"
         return "iheye off (HFAGENT_IHEYE=0). /iheye on to show it"
-    if sys.platform != "darwin":
-        return "iheye only runs on macOS"
+    from .backend import backend_status
+
+    _ready, reason, message = backend_status(sys.platform)
+    if reason in {"missing-pyobjc", "missing-pyside", "unsupported"} and message:
+        return message
     if control.status.reason == "missing-pyobjc" and control.status.message:
         return control.status.message
     if control.status.message and control.status.reason not in {"stopped", "disabled"}:
@@ -287,12 +291,25 @@ def config_report_lines() -> list[str]:
         "default" if look_raw is None or str(look_raw).strip() == "" else source_of("HFAGENT_IHEYE_LOOK")
     )
     lines.append(f"iheye_look={'on' if look_enabled() else 'off'}  [{look_source}]")
-    if sys.platform != "darwin":
-        lines.append("iheye_platform=not-macos")
-    elif pyobjc_available():
-        lines.append("iheye_pyobjc=yes")
+    from .backend import backend_name, qt_available
+
+    kind = backend_name(sys.platform)
+    if kind == "pyobjc":
+        lines.append("iheye_backend=pyobjc")
+        if pyobjc_available():
+            lines.append("iheye_pyobjc=yes")
+        else:
+            lines.append(f"iheye_pyobjc=no  ({INSTALL_HINT})")
+    elif kind == "qt":
+        lines.append("iheye_backend=qt")
+        if qt_available():
+            lines.append("iheye_pyside=yes")
+        else:
+            from .backend import INSTALL_QT_HINT
+
+            lines.append(f"iheye_pyside=no  ({INSTALL_QT_HINT})")
     else:
-        lines.append(f"iheye_pyobjc=no  ({INSTALL_HINT})")
+        lines.append("iheye_backend=unsupported")
     return lines
 
 

@@ -12,7 +12,7 @@
 #
 # Python 3.10-3.13. py -3.12 is preferred (Python install manager). A newer
 # interpreter warns and still runs, because some wheels may be missing.
-# The iheye extra is macOS-only and is not installed.
+# The iheye extra (PySide6 bubble) is installed by default. -NoIheye skips it.
 #
 # IHAGENT_HOME overrides the clone directory used when this script is not
 # already inside a checkout (default: ~\ihagent).
@@ -62,17 +62,20 @@ If Activate.ps1 or this file is blocked:
   Set-ExecutionPolicy -Scope CurrentUser RemoteSigned
 
 Python 3.10-3.13 is required. py -3.12 is preferred. Newer Pythons warn
-and still run; some wheels may be missing. iheye is macOS-only.
+and still run; some wheels may be missing. -NoIheye skips the PySide6 bubble.
 "@ | Write-Host
 }
 
 $Uninstall = $false
 $Help = $false
+$script:NoIheye = $false
 if ($env:IHAGENT_UNINSTALL -eq "1") { $Uninstall = $true }
 foreach ($arg in $args) {
     switch ($arg) {
         "-Uninstall" { $Uninstall = $true }
         "--uninstall" { $Uninstall = $true }
+        "-NoIheye" { $script:NoIheye = $true }
+        "--no-iheye" { $script:NoIheye = $true }
         "-h" { $Help = $true }
         "--help" { $Help = $true }
         "-?" { $Help = $true }
@@ -212,13 +215,15 @@ function Ensure-Venv($Python, [string]$Root) {
 
 function Install-Package([string]$Root) {
     $venvPython = Join-Path $Root ".venv\Scripts\python.exe"
-    Write-Step "Installing ihagent[browser]"
+    $extras = "browser,iheye"
+    if ($script:NoIheye) { $extras = "browser" }
+    Write-Step "Installing ihagent[$extras]"
     Push-Location $Root
     try {
         & $venvPython -m pip install --upgrade pip
         if ($LASTEXITCODE -ne 0) { Fail "pip upgrade failed." }
         # Double quotes: cmd.exe does not treat single quotes as quotes.
-        & $venvPython -m pip install -e "ihagent[browser]"
+        & $venvPython -m pip install -e "ihagent[$extras]"
         if ($LASTEXITCODE -ne 0) { Fail "pip install failed." }
     } finally {
         Pop-Location

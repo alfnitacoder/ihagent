@@ -44,6 +44,7 @@ usage() {
 Install IHAgent on macOS or Linux.
 
   ./install.sh
+  ./install.sh --no-iheye
   ./install.sh --uninstall
 
 From the network (clones or updates ~/ihagent, unless IHAGENT_HOME is set,
@@ -58,9 +59,11 @@ EOF
 }
 
 UNINSTALL=0
+NO_IHEYE=0
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --uninstall) UNINSTALL=1; shift ;;
+    --no-iheye) NO_IHEYE=1; shift ;;
     -h|--help) usage; exit 0 ;;
     *) die "unknown flag: $1 (try --help)" ;;
   esac
@@ -183,9 +186,9 @@ ensure_venv() {
 }
 
 install_package() {
-  local extras="browser"
-  if [[ "$(uname -s)" == "Darwin" ]]; then
-    extras="browser,iheye"
+  local extras="browser,iheye"
+  if [[ "$NO_IHEYE" -eq 1 ]]; then
+    extras="browser"
   fi
   log "Installing ihagent[$extras]"
   "$ROOT/.venv/bin/python" -m pip install --upgrade pip </dev/null
