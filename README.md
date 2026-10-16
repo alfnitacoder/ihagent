@@ -12,6 +12,11 @@ The screenshot is a live session on Ollama Cloud (`host` label `cloud`, device `
 
 ## Contents
 
+- [Installation](#installation)
+  - [macOS](#macos)
+  - [Linux](#linux)
+  - [Windows](#windows)
+  - [Install troubleshooting](#install-troubleshooting)
 - [Install and quick start](#install-and-quick-start)
 - [TUI](#tui)
 - [Command line](#command-line)
@@ -30,9 +35,157 @@ The screenshot is a live session on Ollama Cloud (`host` label `cloud`, device `
 - [Troubleshooting](#troubleshooting)
 - [Project layout and tests](#project-layout-and-tests)
 
+## Installation
+
+Python 3.10 through 3.13. Python 3.12 is the one to use. A newer interpreter (for example 3.15) may be missing wheels for Playwright and, on macOS, PyObjC. The installers create a `.venv` in the repository, install the `browser` extra, and on macOS the `iheye` extra. macOS and Linux then run `python -m playwright install chromium`. Windows runs `.venv\Scripts\python -m playwright install chrome`. They write `~/.hfagent/.env` when that file is absent, and put `ihagent` on `PATH`. An existing `~/.hfagent/.env` is never overwritten.
+
+`iheye` is macOS-only (PyObjC). Linux and Windows install `ihagent[browser]` and leave that extra off.
+
+The user file, when the installer creates it:
+
+```text
+HF_API_KEY=
+OLLAMA_API_KEY=
+HF_BASE_URL=https://router.huggingface.co/v1
+HFAGENT_MODEL=Qwen/Qwen2.5-Coder-32B-Instruct
+```
+
+Blank keys are ignored. `HF_TOKEN` is also read for the Hugging Face router. Fill in `HF_API_KEY` or `OLLAMA_API_KEY` before a cloud model will answer. `ihagent --version` prints `0.4.0`.
+
+### macOS
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/alfnitacoder/ihagent/master/install.sh | bash
+```
+
+From a clone you already have: `./install.sh`. The script installs `ihagent[browser,iheye]`, links `ihagent` and `hfagent` into `~/.local/bin`, and tells you to add that directory to `PATH` when it is missing. Remove the venv and those links with `./install.sh --uninstall`. `~/.hfagent` is left as it is.
+
+Manual equivalent:
+
+```bash
+git clone https://github.com/alfnitacoder/ihagent.git
+cd ihagent
+python3.12 -m venv .venv
+source .venv/bin/activate
+python -m pip install -e "ihagent[browser,iheye]"
+python -m playwright install chromium
+# Google Chrome is fine too: python -m playwright install chrome
+mkdir -p ~/.hfagent
+test -f ~/.hfagent/.env || cat > ~/.hfagent/.env <<'EOF'
+HF_API_KEY=
+OLLAMA_API_KEY=
+HF_BASE_URL=https://router.huggingface.co/v1
+HFAGENT_MODEL=Qwen/Qwen2.5-Coder-32B-Instruct
+EOF
+chmod 600 ~/.hfagent/.env
+ihagent
+```
+
+Use `python3.12` when that command exists. Any Python 3.10–3.13 works (`python3 -m venv .venv`). `iheye` installs `pyobjc-framework-Cocoa`, `pyobjc-framework-Quartz`, and `pyobjc-framework-Vision`.
+
+### Linux
+
+Same installer. The `iheye` extra is skipped.
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/alfnitacoder/ihagent/master/install.sh | bash
+```
+
+From a clone: `./install.sh`. Uninstall: `./install.sh --uninstall`.
+
+Manual equivalent:
+
+```bash
+git clone https://github.com/alfnitacoder/ihagent.git
+cd ihagent
+python3.12 -m venv .venv
+source .venv/bin/activate
+python -m pip install -e "ihagent[browser]"
+python -m playwright install chromium
+mkdir -p ~/.hfagent
+test -f ~/.hfagent/.env || cat > ~/.hfagent/.env <<'EOF'
+HF_API_KEY=
+OLLAMA_API_KEY=
+HF_BASE_URL=https://router.huggingface.co/v1
+HFAGENT_MODEL=Qwen/Qwen2.5-Coder-32B-Instruct
+EOF
+chmod 600 ~/.hfagent/.env
+ihagent
+```
+
+### Windows
+
+```powershell
+irm https://raw.githubusercontent.com/alfnitacoder/ihagent/master/install.ps1 | iex
+```
+
+`py -3.12` is used when the Python install manager has it. The script activates `.venv\Scripts\Activate.ps1`, installs `ihagent[browser]` with double quotes, and runs `.venv\Scripts\python -m playwright install chrome`. `playwright` itself is not on `PATH` outside the venv. `ihagent.cmd` and `hfagent.cmd` shims are written to `%USERPROFILE%\.local\bin`, and that directory is added to the user `PATH` (open a new terminal afterwards).
+
+If a downloaded `install.ps1` or `Activate.ps1` will not run:
+
+```powershell
+Set-ExecutionPolicy -Scope CurrentUser RemoteSigned
+powershell -ExecutionPolicy Bypass -File .\install.ps1
+```
+
+Uninstall: `powershell -ExecutionPolicy Bypass -File .\install.ps1 -Uninstall`.
+
+Manual steps in PowerShell:
+
+```powershell
+git clone https://github.com/alfnitacoder/ihagent.git
+cd ihagent
+py -3.12 -m venv .venv
+.\.venv\Scripts\Activate.ps1
+python -m pip install -e "ihagent[browser]"
+.\.venv\Scripts\python -m playwright install chrome
+New-Item -ItemType Directory -Force -Path "$env:USERPROFILE\.hfagent" | Out-Null
+if (-not (Test-Path "$env:USERPROFILE\.hfagent\.env")) {
+  @"
+# IHAgent user settings. Blank values are ignored.
+HF_API_KEY=
+OLLAMA_API_KEY=
+HF_BASE_URL=https://router.huggingface.co/v1
+HFAGENT_MODEL=Qwen/Qwen2.5-Coder-32B-Instruct
+"@ | Set-Content -Encoding utf8 "$env:USERPROFILE\.hfagent\.env"
+}
+ihagent
+```
+
+If `Activate.ps1` is blocked, run `Set-ExecutionPolicy -Scope CurrentUser RemoteSigned` and try again. You can skip activation and call `.venv\Scripts\python` and `.venv\Scripts\ihagent.exe` by path.
+
+Manual steps in cmd.exe. cmd does not treat single quotes as quotes, so the bash form of this install fails with:
+
+```text
+'ihagent[browser,iheye]' is not a valid editable requirement
+```
+
+Use double quotes, and do not pass `iheye` (macOS only):
+
+```cmd
+git clone https://github.com/alfnitacoder/ihagent.git
+cd ihagent
+py -3.12 -m venv .venv
+.venv\Scripts\activate.bat
+python -m pip install -e "ihagent[browser]"
+.venv\Scripts\python -m playwright install chrome
+mkdir "%USERPROFILE%\.hfagent"
+notepad "%USERPROFILE%\.hfagent\.env"
+ihagent
+```
+
+Create `%USERPROFILE%\.hfagent\.env` only when it is not already there. The four lines are the same as the block at the top of this section.
+
+### Install troubleshooting
+
+- **`playwright` is not recognized**, or **`playwright: command not found`**. The console script lives inside the venv and is not on `PATH` until that venv is active. Activate it (`source .venv/bin/activate`, `.venv\Scripts\Activate.ps1`, or `.venv\Scripts\activate.bat`), or skip the command and call the venv Python: `python -m playwright install chromium`. On Windows that is `.venv\Scripts\python -m playwright install chrome`.
+- **`iheye` fails to install, or PyObjC will not build, on Linux or Windows.** `iheye` is macOS-only. Install `ihagent[browser]` on Linux and Windows. On macOS, `ihagent[browser,iheye]`.
+- **Python 3.15, or anything newer than 3.13.** Too new for some wheels. Install Python 3.12 and recreate the venv (`python3.12 -m venv .venv`, or `py -3.12 -m venv .venv`).
+- **`ModuleNotFoundError: hfagent.cli`** (also `No module named 'hfagent.cli'`). The `ihagent` on `PATH` is not the venv that has the package. Reinstall with that venv's Python: `.venv/bin/python -m pip install -e "ihagent[browser]"` (macOS: `"ihagent[browser,iheye]"`). On Windows: `.venv\Scripts\python -m pip install -e "ihagent[browser]"`.
+
 ## Install and quick start
 
-From the repository root:
+Platform installers and the same steps by hand are in [Installation](#installation). From the repository root:
 
 ```bash
 python3 -m venv .venv
@@ -42,7 +195,7 @@ playwright install chrome
 ihagent
 ```
 
-`browser` installs Playwright. `iheye` installs PyObjC on macOS (`pyobjc-framework-Cocoa`, plus Quartz and Vision for a one-shot screenshot and OCR). On other platforms that extra is empty and the overlay stays off. Tests use the `dev` extra: `pip install -e 'ihagent[dev,browser,iheye]'`.
+`browser` installs Playwright. `iheye` installs PyObjC on macOS (`pyobjc-framework-Cocoa`, plus Quartz and Vision for a one-shot screenshot and OCR). On other platforms that extra is empty and the overlay stays off. cmd.exe does not treat single quotes as quotes, so `pip install -e 'ihagent[browser,iheye]'` there fails with `'ihagent[browser,iheye]' is not a valid editable requirement`. Use double quotes, and skip `iheye` off macOS: `pip install -e "ihagent[browser]"`. Tests use the `dev` extra: `pip install -e 'ihagent[dev,browser,iheye]'`.
 
 One prompt, or the line REPL:
 
@@ -593,6 +746,10 @@ A dedicated Hugging Face GPU endpoint is a different host. `scripts/setup-huggin
 
 | Message | What to do |
 | :--- | :--- |
+| `playwright` is not recognized, or `playwright: command not found` | The console script is inside the venv. Activate `.venv`, or run `python -m playwright`. On Windows: `.venv\Scripts\python -m playwright install chrome`. See [Install troubleshooting](#install-troubleshooting). |
+| `ModuleNotFoundError: hfagent.cli` | The `ihagent` on `PATH` is not the venv that has the package. Reinstall with that venv's Python: `.venv/bin/python -m pip install -e "ihagent[browser]"` (macOS: add `,iheye`). On Windows: `.venv\Scripts\python -m pip install -e "ihagent[browser]"`. |
+| Python 3.15, or newer than 3.13 | Some wheels are missing. Use Python 3.12 (`python3.12`, or `py -3.12`). |
+| `'ihagent[browser,iheye]' is not a valid editable requirement` | cmd.exe does not treat single quotes as quotes. Use double quotes, and skip `iheye` off macOS: `pip install -e "ihagent[browser]"`. |
 | `No API key found.` | For the Hugging Face router, `export HF_TOKEN=...` or start the TUI and paste `/model_api=...`. `HF_API_KEY` and `HFAGENT_API_KEY` are also read. |
 | `No Ollama API key found.` | For `https://ollama.com`, set `OLLAMA_API_KEY` or paste `/model_api=...`. |
 | `No Ollama model found.` | `ollama serve`, then `ollama list`, or `ihagent --ollama <model>`. |
@@ -656,6 +813,8 @@ An editable install from `ihagent/` itself is `pip install -e '.[dev,browser,ihe
 ```text
 .
 ├── README.md                          # this file
+├── install.sh                         # macOS and Linux installer
+├── install.ps1                        # Windows installer
 ├── docs/images/                       # TUI and iheye screenshots
 ├── package.json                       # separate PDF Sentinel web app (not ihagent)
 ├── src/                               # that web app
