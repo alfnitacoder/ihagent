@@ -71,7 +71,17 @@ class _MouseTool(Tool):
         return get_controller().needs_approval(self.action)
 
     def preview(self, **kwargs: Any) -> str:
+        try:
+            get_controller().stage(self.action, **kwargs)
+        except Exception:
+            pass
         return _preview(self.action, kwargs)
+
+    def abandon(self, **kwargs: Any) -> None:
+        try:
+            get_controller().abandon_overlay()
+        except Exception:
+            return None
 
     def run(self, **kwargs: Any) -> str:
         try:

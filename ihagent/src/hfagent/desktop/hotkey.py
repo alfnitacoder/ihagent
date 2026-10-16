@@ -67,6 +67,12 @@ def start_hotkey(spec: str | None = None) -> str:
         pressed.add(_from_pynput(key))
         if chord_down(chord, pressed):
             get_session().trip(f"hotkey {spec or get_session().hotkey_spec()}")
+            try:
+                from .overlay_host import hide_overlay
+
+                hide_overlay()
+            except Exception:
+                pass
 
     def on_release(key) -> None:
         pressed.discard(_from_pynput(key))

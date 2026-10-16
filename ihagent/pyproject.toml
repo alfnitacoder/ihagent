@@ -28,6 +28,7 @@ desktop = [
   "pyobjc-framework-ApplicationServices>=11.0; sys_platform == 'darwin'",
   "pywinauto>=0.6.8; sys_platform == 'win32'",
   "python-xlib>=0.33; sys_platform == 'linux'",
+  "PySide6>=6.6; sys_platform != 'darwin'",
 ]
 
 [project.scripts]

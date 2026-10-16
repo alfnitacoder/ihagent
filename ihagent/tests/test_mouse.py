@@ -99,6 +99,7 @@ def _isolated_mouse(monkeypatch, tmp_path):
     monkeypatch.delenv("HFAGENT_VISION_MODEL", raising=False)
     monkeypatch.delenv("HFAGENT_VISION_BASE_URL", raising=False)
     monkeypatch.delenv("HFAGENT_VISION_API_KEY", raising=False)
+    monkeypatch.delenv("HFAGENT_MOUSE_OVERLAY", raising=False)
     reset_for_tests()
     yield
     reset_for_tests()
@@ -563,6 +564,8 @@ def test_importing_tools_does_not_load_os_backends():
     assert "pywinauto" not in sys.modules
     assert "pyatspi" not in sys.modules
     assert "ApplicationServices" not in sys.modules
+    assert "AppKit" not in sys.modules
+    assert "PySide6" not in sys.modules
 
 
 def test_slash_mouse_persists_and_stop(monkeypatch, tmp_path):
@@ -593,7 +596,9 @@ def test_slash_mouse_persists_and_stop(monkeypatch, tmp_path):
     assert get_session().stopped
     assert dispatch_slash(agent, ui, "/mouse off") == "handled"
     assert ui.status[-1] == "mouse off. Nothing is watching the screen."
-    assert handle_command("sideways") == "usage: /mouse on|off | approval per-action|per-task | log | stop"
+    assert handle_command("sideways") == (
+        "usage: /mouse on|off | overlay on|off | approval per-action|per-task | log | stop"
+    )
 
 
 def test_config_report_mentions_mouse_and_vision(monkeypatch):

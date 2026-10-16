@@ -90,7 +90,7 @@ Mouse control is optional and off until `/mouse on`. From the same venv:
 python -m pip install -e "ihagent[desktop]"
 ```
 
-That pulls in pyautogui, pynput, and the PyObjC frameworks used to read the focused app (including ApplicationServices). Then grant Accessibility, and Screen Recording if a vision model will look at the window. The steps are in [Mouse control](#mouse-control).
+That pulls in pyautogui, pynput, and the PyObjC frameworks used to read the focused app (including ApplicationServices). The same frameworks draw the ihmouse pointer: a small click-through robot on top of every display. Then grant Accessibility, and Screen Recording if a vision model will look at the window. The steps are in [Mouse control](#mouse-control).
 
 ### Linux
 
@@ -122,7 +122,7 @@ chmod 600 ~/.hfagent/.env
 ihagent
 ```
 
-Mouse control is the same optional extra as on macOS (`pip install -e "ihagent[desktop]"`). The pip extra installs pyautogui, pynput, and `python-xlib`. The accessibility tree needs the distro package, which pip cannot install reliably:
+Mouse control is the same optional extra as on macOS (`pip install -e "ihagent[desktop]"`). The pip extra installs pyautogui, pynput, `python-xlib`, and PySide6. PySide6 draws the ihmouse pointer. The accessibility tree needs the distro package, which pip cannot install reliably:
 
 ```bash
 # Debian or Ubuntu
@@ -178,7 +178,7 @@ Mouse control is optional. From the same venv, with double quotes:
 python -m pip install -e "ihagent[desktop]"
 ```
 
-That installs pyautogui, pynput, and pywinauto. UI Automation reads the focused window. A vision-model fallback needs a screenshot, which pyautogui takes. See [Mouse control](#mouse-control).
+That installs pyautogui, pynput, pywinauto, and PySide6. UI Automation reads the focused window. PySide6 draws the ihmouse pointer. A vision-model fallback needs a screenshot, which pyautogui takes. See [Mouse control](#mouse-control).
 
 If `Activate.ps1` is blocked, run `Set-ExecutionPolicy -Scope CurrentUser RemoteSigned` and try again. You can skip activation and call `.venv\Scripts\python` and `.venv\Scripts\ihagent.exe` by path.
 
@@ -353,6 +353,7 @@ The first source that sets a value wins. `ihagent --show-config` and `/config` p
 | `HFAGENT_MOUSE` | off | `1` / `on` allows desktop mouse tools. `/mouse on` and `/mouse off` persist it. Nothing watches the screen while this is off. |
 | `HFAGENT_MOUSE_APPROVAL` | `per-action` | `per-task` asks once per user turn. `per-action` asks before every click, type, key, scroll, move, and screen description. |
 | `HFAGENT_MOUSE_STOP_HOTKEY` | `ctrl+alt+esc` | Chord that stops further mouse actions while `/mouse` is on. A pointer in a screen corner does the same. |
+| `HFAGENT_MOUSE_OVERLAY` | on | `0` / `off` hides the ihmouse robot. `/mouse overlay on` and `/mouse overlay off` persist it. The system pointer still moves. |
 | `HFAGENT_VISION_MODEL` | current model, if it can see | Vision model for screenshot fallback. Text-only chat models (including Ollama Cloud `gpt-oss:120b`) are not used. |
 | `HFAGENT_VISION_BASE_URL` | current chat host | Optional OpenAI-compatible `/v1` URL for the vision model. |
 | `HFAGENT_VISION_API_KEY` | current chat key | Optional key for that vision host. |
@@ -728,6 +729,18 @@ Coordinates keep multi-monitor layouts and HiDPI. The origin is the top-left of 
 - Every action is appended to `~/.hfagent/mouse.log` and shown in the tool result. `/mouse log` prints the recent lines. Set `HFAGENT_MOUSE_LOG` to write somewhere else.
 - Typing into a password field is refused, including a secure text field and an edit control whose name says password. A button named "Change password" is not treated as one.
 
+### On-screen pointer
+
+While mouse control is on, **ihmouse** draws IHAgent's own pointer: a small robot cursor in the iheye style (white body, black face, cyan eyes, glowing cyan ring). It is a transparent, always-on-top, click-through window that covers every display. It does not receive clicks, and it does not capture the screen. The system pointer is still what clicks.
+
+When an action is proposed, the robot glides from where it is to the target and draws a cyan rounded rectangle around that element's bounds, with a label such as `Click: Save`, for as long as the approval prompt is up. A click then pulses. Typing shows three cyan dots. After you confirm, the real system pointer performs the action. A few seconds after it goes idle, the robot fades. `/mouse off`, `/mouse stop`, and a declined prompt hide it immediately.
+
+`/mouse overlay off` hides it and saves `HFAGENT_MOUSE_OVERLAY=0`. `/mouse overlay on` brings it back. `HFAGENT_IHEYE_REDUCE_MOTION=1` snaps the glide instead of animating it.
+
+macOS draws it with AppKit, the same kind of non-activating floating panel as the iheye bubble, and marks the window so screenshots skip it. Windows and Linux draw it with PySide6 (a frameless Qt tool window that does not accept input). Windows also sets the extended style so clicks pass through and screen capture excludes the window. Coordinates stay in pointer space: a display left of the primary keeps a negative x, and HiDPI scale is not applied on top of points or logical pixels.
+
+If PyObjC or PySide6 is missing, or Linux has no `DISPLAY` or `WAYLAND_DISPLAY`, mouse actions still run and the tool log says the overlay is unavailable. On Wayland, click-through is best-effort; if the desktop cannot pass clicks through, turn the overlay off.
+
 ### Vision model
 
 The default chat model is text-only. Ollama Cloud `gpt-oss:120b` cannot see a screenshot, and neither can the Hugging Face coder default. Set a vision model separately. The base URL and key default to whatever chat backend the session is using (Ollama Cloud, local Ollama, or your Kaggle or Colab OpenAI-compatible `/v1`).
@@ -852,7 +865,7 @@ A dedicated Hugging Face GPU endpoint is a different host. `scripts/setup-huggin
 | `/browser [close]` | Chrome status, or close the window. |
 | `/mcp` | List MCP servers, status, and tool counts. Subcommands: `add`, `remove`, `login`, `tools`, `reload`, `enable`, `disable`. |
 | `/iheye [on\|off]` | macOS floating bubble. `track on\|off`, `summary on\|off`, and `look on\|off` toggle gaze, the completion card, and one-shot capture. |
-| `/mouse [on\|off]` | Desktop pointer. Off until `on`. `approval per-action\|per-task`, `log`, and `stop`. |
+| `/mouse [on\|off]` | Desktop pointer. Off until `on`. `overlay on\|off` shows or hides the ihmouse robot. `approval per-action\|per-task`, `log`, and `stop`. |
 | `/memory` | Show long-term memory. |
 | `/forget` | Wipe long-term memory. |
 | `/skills` | List coding skills. |
@@ -925,7 +938,8 @@ A dedicated Hugging Face GPU endpoint is a different host. `scripts/setup-huggin
 | `Windows UI Automation is not available` | `pip install "ihagent[desktop]"`. The focused app has to expose UI Automation. |
 | `no vision model is configured` | Set `HFAGENT_VISION_MODEL` (for example `qwen2.5vl`). Optional `HFAGENT_VISION_BASE_URL` and `HFAGENT_VISION_API_KEY` default to the current chat host. |
 | `refusing to type into a password field` | Expected. Mouse control does not enter secrets. Click a normal field, or press Tab / Escape to leave the password field. |
-| `emergency stop` | The pointer was in a corner, the stop hotkey fired, or you ran `/mouse stop`. `/mouse on` resumes. |
+| `emergency stop` | The pointer was in a corner, the stop hotkey fired, or you ran `/mouse stop`. `/mouse on` resumes. The ihmouse robot hides until then. |
+| `ihmouse overlay needs PyObjC` / `needs PySide6` / `needs a graphical session` | The robot cannot be drawn. Install `ihagent[desktop]` (PySide6 is included off macOS). On Linux, run inside a graphical session. Clicks still use the system pointer. `/mouse overlay off` silences it. |
 
 Connection errors name the base URL. `ihagent --show-config` is the first check when the wrong host or the wrong key is in use: a process value copied from `source ~/.hfagent/hf.env` is attributed to that file, so a project `.env` can still override it. Export a different value when the shell should win.
 
@@ -941,7 +955,7 @@ cd ihagent
 pytest
 ```
 
-An editable install from `ihagent/` itself is `pip install -e '.[dev,browser,iheye]'`. The suite covers the agent loop, config precedence, `/url` and fallback, context compaction, reasoning display, browser approvals, the TUI helpers, MCP (in-process stdio server), terminal restore, iheye focus, hover, summary, skins, and supervisor rules, and mouse control with mocked accessibility, pointer, and vision calls. Those iheye and mouse tests do not open AppKit, pyautogui, or a display. The overlay itself runs only on macOS. The suite does not launch a live model or a live browser.
+An editable install from `ihagent/` itself is `pip install -e '.[dev,browser,iheye]'`. The suite covers the agent loop, config precedence, `/url` and fallback, context compaction, reasoning display, browser approvals, the TUI helpers, MCP (in-process stdio server), terminal restore, iheye focus, hover, summary, skins, and supervisor rules, and mouse control with mocked accessibility, pointer, vision calls, and the ihmouse overlay. Those iheye and mouse tests do not open AppKit, pyautogui, Qt, or a display. The iheye bubble runs in its own process on macOS. The suite does not launch a live model or a live browser.
 
 ```text
 .
@@ -970,7 +984,7 @@ An editable install from `ihagent/` itself is `pip install -e '.[dev,browser,ihe
         ├── terminal.py                # mouse-mode and termios restore on exit
         ├── browser.py                 # dedicated Chrome
         ├── iheye/                     # macOS floating overlay (bot, grok, classic, robot)
-        ├── desktop/                   # mouse control (accessibility, vision fallback, safety)
+        ├── desktop/                   # mouse control, ihmouse overlay, vision fallback, safety
         ├── mcp/                       # MCP client, oauth, ~/.hfagent/mcp.json
         ├── tools/                     # files, shell, ssh, memory, browser, mouse
         ├── ui/                        # Textual TUI and Rich console

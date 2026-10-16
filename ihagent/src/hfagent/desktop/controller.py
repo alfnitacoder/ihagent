@@ -12,6 +12,8 @@ from typing import Any, Callable
 from .capture import CaptureError, fit_png
 from .elements import TreeSnapshot, format_elements, key_is_navigation
 from .geometry import CaptureRegion, Monitor, Rect, is_corner, on_screen, pixels_to_pointer
+from .overlay_host import get_overlay, overlay_requested, peek_overlay
+from .overlay_motion import Cue, effect_for, make_cue
 from .permissions import screen_hint
 from .pointer import MissingDesktopExtra, PyAutoPointer, normalize_keys
 from .session import EmergencyStop, Session, get_session, stamp
@@ -58,6 +60,7 @@ class DesktopController:
         vision: Callable[[VisionSettings, list[dict[str, Any]]], str] | None = None,
         monitors: Callable[[], list[Monitor]] | None = None,
         session: Session | None = None,
+        overlay: Any = None,
     ) -> None:
         self.tree_reader = tree_reader
         self.pointer = pointer
@@ -65,9 +68,36 @@ class DesktopController:
         self.vision = vision
         self.monitors = monitors
         self.session = session if session is not None else get_session()
+        self._overlay_client = overlay
 
     def needs_approval(self, action: str) -> bool:
         return self.session.needs_confirm(action)
+
+    def stage(self, action: str, **kwargs: Any) -> None:
+        """Show the robot on the target while the approval prompt is up.
+
+        This does not move the system pointer and does not take a screenshot.
+        A vision target is drawn later, after the user confirms.
+        """
+        try:
+            self._stage(action, kwargs)
+        except Exception:
+            return
+
+    def abandon_overlay(self) -> None:
+        """The user declined. Hide the highlight."""
+        self._hide_overlay()
+
+    def _stage(self, action: str, kwargs: dict[str, Any]) -> None:
+        if action not in POINTER_ACTIONS:
+            return
+        ui = self._ui()
+        if ui is None:
+            return
+        aim = self._aim_quietly(action, kwargs)
+        if aim is None:
+            return
+        ui.propose(self._cue(action, aim, kwargs), self._safe_position())
 
     def perform(self, action: str, **kwargs: Any) -> str:
         try:
@@ -87,7 +117,7 @@ class DesktopController:
             if action == "key":
                 return self._key(kwargs)
         except EmergencyStop as exc:
-            self.session.trip(str(exc) or "emergency stop")
+            self._trip(str(exc) or "emergency stop")
             return self._fail(
                 "Error: emergency stop. The pointer hit a screen corner. "
                 "No further mouse actions will run. /mouse on to resume."
@@ -116,7 +146,7 @@ class DesktopController:
         if action in POINTER_ACTIONS:
             pos = self._position()
             if pos is not None and is_corner(pos[0], pos[1], self._monitors()):
-                self.session.trip("pointer in a screen corner")
+                self._trip("pointer in a screen corner")
                 return (
                     "Error: emergency stop. The pointer is in a screen corner. "
                     "No further mouse actions will run. /mouse on to resume."
@@ -176,14 +206,17 @@ class DesktopController:
         blocked = self._destination_blocked(aimed)
         if blocked:
             return blocked
+        self._announce(action, aimed, kwargs)
         self.session.grant_task()
         if action == "move":
             self._pointer().move(aimed.x, aimed.y)
+            self._finish_overlay()
             return self._ok(
                 f"moved to ({_fmt(aimed.x)}, {_fmt(aimed.y)}) via {aimed.source} ({aimed.label})"
             )
         clicks, button = _CLICKS[action]
         self._pointer().click(aimed.x, aimed.y, button, clicks)
+        self._finish_overlay()
         verb = {"click": "clicked", "double_click": "double-clicked", "right_click": "right-clicked"}[
             action
         ]
@@ -206,13 +239,17 @@ class DesktopController:
             x, y = aimed.x, aimed.y
             where = aimed.label
             source = aimed.source
+            shown = aimed
         else:
             pos = self._position() or (0.0, 0.0)
             x, y = pos
             where = "the pointer"
             source = "pointer"
+            shown = Aim(x, y, source, where, None)
+        self._announce("scroll", shown, kwargs)
         self.session.grant_task()
         self._pointer().scroll(x, y, amount)
+        self._finish_overlay()
         return self._ok(
             f"scrolled {amount} at ({_fmt(x)}, {_fmt(y)}) via {source} ({where})"
         )
@@ -236,6 +273,7 @@ class DesktopController:
             blocked = self._destination_blocked(resolved)
             if blocked:
                 return blocked
+            self._announce("type", resolved, kwargs)
             self._pointer().click(resolved.x, resolved.y, "left", 1)
             aimed = resolved
             # A named control we already checked is not a password field.
@@ -250,8 +288,16 @@ class DesktopController:
             focused = snap.focused
             if focused is not None and focused.password:
                 return self._refuse_password(focused)
+            if focused is not None:
+                cx, cy = focused.center()
+                aimed = Aim(cx, cy, "accessibility", focused.label(), focused)
+            else:
+                pos = self._safe_position() or (0.0, 0.0)
+                aimed = Aim(pos[0], pos[1], "pointer", "the focused field", None)
+            self._announce("type", aimed, kwargs)
         self.session.grant_task()
         self._pointer().type_text(text)
+        self._finish_overlay()
         shown = text if len(text) <= 40 else text[:37] + "..."
         where = aimed.label if aimed is not None else "the focused field"
         return self._ok(f"typed {shown!r} into {where}")
@@ -267,9 +313,123 @@ class DesktopController:
         focused = snap.focused
         if focused is not None and focused.password and not key_is_navigation(spec):
             return self._refuse_password(focused)
+        if focused is not None:
+            cx, cy = focused.center()
+            aimed = Aim(cx, cy, "accessibility", focused.label(), focused)
+        else:
+            pos = self._safe_position() or (0.0, 0.0)
+            aimed = Aim(pos[0], pos[1], "pointer", spec, None)
+        self._announce("key", aimed, kwargs)
         self.session.grant_task()
         self._pointer().press(keys)
+        self._finish_overlay()
         return self._ok(f"pressed {spec}")
+
+    def _ui(self):
+        if not self.session.enabled() or not overlay_requested():
+            return None
+        if self._overlay_client is not None:
+            return self._overlay_client
+        return get_overlay()
+
+    def _cue(self, action: str, aim: Aim, kwargs: dict[str, Any]) -> Cue:
+        name = ""
+        if aim.element is not None and aim.element.name.strip():
+            name = aim.element.name.strip()
+        elif aim.label:
+            name = aim.label
+        bounds = None
+        if aim.element is not None and aim.element.width > 0 and aim.element.height > 0:
+            bounds = Rect(aim.element.x, aim.element.y, aim.element.width, aim.element.height)
+        return make_cue(
+            action,
+            aim.x,
+            aim.y,
+            name,
+            bounds,
+            text=str(kwargs.get("text") or ""),
+            key=str(kwargs.get("key") or kwargs.get("keys") or ""),
+        )
+
+    def _announce(self, action: str, aim: Aim, kwargs: dict[str, Any]) -> None:
+        ui = self._ui()
+        if ui is None:
+            return
+        try:
+            ui.propose(self._cue(action, aim, kwargs), self._safe_position())
+            ui.wait_arrived(1.0)
+            effect = effect_for(action)
+            if effect:
+                ui.act(effect)
+                ui.wait_effect(0.16)
+        except Exception:
+            return
+
+    def _finish_overlay(self) -> None:
+        ui = self._ui()
+        if ui is None:
+            return
+        try:
+            ui.release()
+        except Exception:
+            return
+
+    def _hide_overlay(self) -> None:
+        client = self._overlay_client if self._overlay_client is not None else peek_overlay()
+        if client is None:
+            return
+        try:
+            client.hide()
+        except Exception:
+            return
+
+    def _trip(self, reason: str) -> None:
+        self.session.trip(reason)
+        self._hide_overlay()
+
+    def _safe_position(self) -> tuple[float, float] | None:
+        try:
+            return self._position()
+        except Exception:
+            return None
+
+    def _onscreen(self, aim: Aim) -> Aim | None:
+        monitors = self._monitors()
+        if is_corner(aim.x, aim.y, monitors) or not on_screen(aim.x, aim.y, monitors):
+            return None
+        return aim
+
+    def _aim_quietly(self, action: str, kwargs: dict[str, Any]) -> Aim | None:
+        """Resolve a highlight without a screenshot or a pointer move."""
+        snap = self._tree()
+        element = coerce_element(kwargs.get("element"))
+        target = str(kwargs.get("target") or "")
+        pointed = has_target(element, target, kwargs.get("x"), kwargs.get("y"))
+        if action == "key" or (action == "type" and not pointed) or (action == "scroll" and not pointed):
+            focused = snap.focused
+            if action == "type" and focused is not None and focused.password:
+                return None
+            spec = str(kwargs.get("key") or kwargs.get("keys") or "")
+            if action == "key" and focused is not None and focused.password and not key_is_navigation(spec):
+                return None
+            if action != "scroll" and focused is not None and focused.width > 0:
+                cx, cy = focused.center()
+                return self._onscreen(Aim(cx, cy, "accessibility", focused.label(), focused))
+            pos = self._safe_position() or (0.0, 0.0)
+            label = "the pointer" if action == "scroll" else (spec or "the focused field")
+            return self._onscreen(Aim(pos[0], pos[1], "pointer", label, None))
+        resolved = resolve_aim(
+            snap.elements,
+            element=element,
+            target=target.strip(),
+            x=kwargs.get("x"),
+            y=kwargs.get("y"),
+        )
+        if not isinstance(resolved, Aim):
+            return None
+        if action == "type" and resolved.element is not None and resolved.element.password:
+            return None
+        return self._onscreen(resolved)
 
     def _aim(self, snap: TreeSnapshot, kwargs: dict[str, Any], *, required: bool) -> Aim | str:
         element = coerce_element(kwargs.get("element"))
@@ -325,7 +485,20 @@ class DesktopController:
         return Aim(x, y, "vision", description, None)
 
     def _capture(self, window: Rect) -> tuple[bytes, CaptureRegion]:
-        png, width, height = self._grabber()(window)
+        ui = self._ui()
+        if ui is not None:
+            try:
+                ui.suspend()
+            except Exception:
+                ui = None
+        try:
+            png, width, height = self._grabber()(window)
+        finally:
+            if ui is not None:
+                try:
+                    ui.resume()
+                except Exception:
+                    pass
         png, width, height = fit_png(png, width, height)
         if width <= 0 or height <= 0:
             raise CaptureError(screen_hint(sys.platform))
@@ -334,7 +507,7 @@ class DesktopController:
     def _destination_blocked(self, aimed: Aim) -> str | None:
         monitors = self._monitors()
         if is_corner(aimed.x, aimed.y, monitors):
-            self.session.trip("move to a screen corner")
+            self._trip("move to a screen corner")
             return self._fail(
                 "Error: emergency stop. Refusing to move the pointer into a screen corner. "
                 "/mouse on to resume."
@@ -346,6 +519,7 @@ class DesktopController:
         return None
 
     def _refuse_password(self, element) -> str:
+        self._hide_overlay()
         return self._fail(
             "Error: refusing to type into a password field "
             f"({element.label()}). Mouse control does not enter secrets."

@@ -13,7 +13,7 @@ python3 -m venv .venv
 .venv/bin/ihagent
 ```
 
-`iheye` installs PyObjC on macOS (`pyobjc-framework-Cocoa`). The overlay does nothing on other platforms. Desktop mouse control is optional on macOS, Linux, and Windows: `pip install -e '.[desktop]'` (off until `/mouse on`). See the repository README for permissions and the vision-model settings.
+`iheye` installs PyObjC on macOS (`pyobjc-framework-Cocoa`). The iheye bubble does nothing on other platforms. Desktop mouse control is optional on macOS, Linux, and Windows: `pip install -e '.[desktop]'` (off until `/mouse on`). That extra also draws the ihmouse robot (AppKit on macOS, PySide6 on Windows and Linux). See the repository README for permissions, the overlay, and the vision-model settings.
 
 Tests:
 
