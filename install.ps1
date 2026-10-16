@@ -168,7 +168,7 @@ function Resolve-InstallRoot {
     if ((Test-Path $marker) -and (Test-Path $gitDir)) {
         if ($AllowClone) {
             Write-Step "Updating $dest"
-            & git -C $dest pull --ff-only
+            & git -C $dest pull --ff-only | Out-Host
             if ($LASTEXITCODE -ne 0) {
                 Write-Warn "git pull failed. Installing the copy already in $dest."
             }
@@ -182,7 +182,7 @@ function Resolve-InstallRoot {
             Fail "git is required to clone IHAgent. Install Git for Windows and re-run."
         }
         Write-Step "Cloning $RepoUrl into $dest"
-        & git clone --branch $RepoBranch $RepoUrl $dest
+        & git clone --branch $RepoBranch $RepoUrl $dest | Out-Host
         if ($LASTEXITCODE -ne 0) { Fail "git clone failed." }
     }
     if (Test-Path $dest) { return (Resolve-Path $dest).Path }
