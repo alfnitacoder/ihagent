@@ -27,6 +27,7 @@ The screenshot is a live session on Ollama Cloud (`host` label `cloud`, device `
 - [Browser](#browser)
 - [MCP servers](#mcp-servers)
 - [iheye](#iheye)
+- [Mouse control](#mouse-control)
 - [Approvals and safety](#approvals-and-safety)
 - [Terminal restore](#terminal-restore)
 - [Skills, memory, and sessions](#skills-memory-and-sessions)
@@ -39,7 +40,7 @@ The screenshot is a live session on Ollama Cloud (`host` label `cloud`, device `
 
 Python 3.10 through 3.13. Python 3.12 is the one to use. A newer interpreter (for example 3.15) may be missing wheels for Playwright and, on macOS, PyObjC. The installers create a `.venv` in the repository, install the `browser` extra, and on macOS the `iheye` extra. macOS and Linux then run `python -m playwright install chromium`. Windows runs `.venv\Scripts\python -m playwright install chrome`. They write `~/.hfagent/.env` when that file is absent, and put `ihagent` on `PATH`. An existing `~/.hfagent/.env` is never overwritten.
 
-`iheye` is macOS-only (PyObjC). Linux and Windows install `ihagent[browser]` and leave that extra off.
+`iheye` is macOS-only (PyObjC). Linux and Windows install `ihagent[browser]` and leave that extra off. Desktop mouse control is a separate optional extra, `ihagent[desktop]`, on macOS, Linux, and Windows. The installers do not add it. See [Mouse control](#mouse-control).
 
 The user file, when the installer creates it:
 
@@ -83,6 +84,14 @@ ihagent
 
 Use `python3.12` when that command exists. Any Python 3.10–3.13 works (`python3 -m venv .venv`). `iheye` installs `pyobjc-framework-Cocoa`, `pyobjc-framework-Quartz`, and `pyobjc-framework-Vision`.
 
+Mouse control is optional and off until `/mouse on`. From the same venv:
+
+```bash
+python -m pip install -e "ihagent[desktop]"
+```
+
+That pulls in pyautogui, pynput, and the PyObjC frameworks used to read the focused app (including ApplicationServices). Then grant Accessibility, and Screen Recording if a vision model will look at the window. The steps are in [Mouse control](#mouse-control).
+
 ### Linux
 
 Same installer. The `iheye` extra is skipped.
@@ -112,6 +121,17 @@ EOF
 chmod 600 ~/.hfagent/.env
 ihagent
 ```
+
+Mouse control is the same optional extra as on macOS (`pip install -e "ihagent[desktop]"`). The pip extra installs pyautogui, pynput, and `python-xlib`. The accessibility tree needs the distro package, which pip cannot install reliably:
+
+```bash
+# Debian or Ubuntu
+sudo apt install python3-pyatspi at-spi2-core
+# Fedora
+sudo dnf install python3-pyatspi at-spi2-core
+```
+
+Use a normal GNOME or KDE session so the accessibility bus is running. If AT-SPI is missing, clicks can still fall back to a screenshot once a vision model is set. See [Mouse control](#mouse-control).
 
 ### Windows
 
@@ -152,6 +172,14 @@ HFAGENT_MODEL=Qwen/Qwen2.5-Coder-32B-Instruct
 ihagent
 ```
 
+Mouse control is optional. From the same venv, with double quotes:
+
+```powershell
+python -m pip install -e "ihagent[desktop]"
+```
+
+That installs pyautogui, pynput, and pywinauto. UI Automation reads the focused window. A vision-model fallback needs a screenshot, which pyautogui takes. See [Mouse control](#mouse-control).
+
 If `Activate.ps1` is blocked, run `Set-ExecutionPolicy -Scope CurrentUser RemoteSigned` and try again. You can skip activation and call `.venv\Scripts\python` and `.venv\Scripts\ihagent.exe` by path.
 
 Manual steps in cmd.exe. cmd does not treat single quotes as quotes, so the bash form of this install fails with:
@@ -160,7 +188,7 @@ Manual steps in cmd.exe. cmd does not treat single quotes as quotes, so the bash
 'ihagent[browser,iheye]' is not a valid editable requirement
 ```
 
-Use double quotes, and do not pass `iheye` (macOS only):
+Use double quotes, and do not pass `iheye` (macOS only). The `desktop` install is optional; skip that line if you do not want mouse control:
 
 ```cmd
 git clone https://github.com/alfnitacoder/ihagent.git
@@ -168,6 +196,7 @@ cd ihagent
 py -3.12 -m venv .venv
 .venv\Scripts\activate.bat
 python -m pip install -e "ihagent[browser]"
+python -m pip install -e "ihagent[desktop]"
 .venv\Scripts\python -m playwright install chrome
 mkdir "%USERPROFILE%\.hfagent"
 notepad "%USERPROFILE%\.hfagent\.env"
@@ -195,7 +224,7 @@ playwright install chrome
 ihagent
 ```
 
-`browser` installs Playwright. `iheye` installs PyObjC on macOS (`pyobjc-framework-Cocoa`, plus Quartz and Vision for a one-shot screenshot and OCR). On other platforms that extra is empty and the overlay stays off. cmd.exe does not treat single quotes as quotes, so `pip install -e 'ihagent[browser,iheye]'` there fails with `'ihagent[browser,iheye]' is not a valid editable requirement`. Use double quotes, and skip `iheye` off macOS: `pip install -e "ihagent[browser]"`. Tests use the `dev` extra: `pip install -e 'ihagent[dev,browser,iheye]'`.
+`browser` installs Playwright. `iheye` installs PyObjC on macOS (`pyobjc-framework-Cocoa`, plus Quartz and Vision for a one-shot screenshot and OCR). On other platforms that extra is empty and the overlay stays off. `desktop` is optional on every platform (`pip install -e "ihagent[desktop]"`) and is what adds mouse control. cmd.exe does not treat single quotes as quotes, so `pip install -e 'ihagent[browser,iheye]'` there fails with `'ihagent[browser,iheye]' is not a valid editable requirement`. Use double quotes, and skip `iheye` off macOS: `pip install -e "ihagent[browser]"`. Tests use the `dev` extra: `pip install -e 'ihagent[dev,browser,iheye]'`. The mouse tests mock the OS and do not need the `desktop` extra installed.
 
 One prompt, or the line REPL:
 
@@ -321,6 +350,12 @@ The first source that sets a value wins. `ihagent --show-config` and `/config` p
 | `HFAGENT_IHEYE_SKIN` | `bot` | `bot`, `grok` (alias `face`), `classic`, or `robot`. Read when the helper starts. |
 | `HFAGENT_IHEYE_REDUCE_MOTION` | off | `1` / `on` stops the bot bobbing, spinning, waving, and blinking. macOS Reduce Motion does the same when this is unset. |
 | `HFAGENT_IHEYE_LOOK` | on | `0` / `off` stops one-shot capture of the front app. |
+| `HFAGENT_MOUSE` | off | `1` / `on` allows desktop mouse tools. `/mouse on` and `/mouse off` persist it. Nothing watches the screen while this is off. |
+| `HFAGENT_MOUSE_APPROVAL` | `per-action` | `per-task` asks once per user turn. `per-action` asks before every click, type, key, scroll, move, and screen description. |
+| `HFAGENT_MOUSE_STOP_HOTKEY` | `ctrl+alt+esc` | Chord that stops further mouse actions while `/mouse` is on. A pointer in a screen corner does the same. |
+| `HFAGENT_VISION_MODEL` | current model, if it can see | Vision model for screenshot fallback. Text-only chat models (including Ollama Cloud `gpt-oss:120b`) are not used. |
+| `HFAGENT_VISION_BASE_URL` | current chat host | Optional OpenAI-compatible `/v1` URL for the vision model. |
+| `HFAGENT_VISION_API_KEY` | current chat key | Optional key for that vision host. |
 | `HFAGENT_MCP_DISABLE` | off | `1` / `on` skips connecting servers in `~/.hfagent/mcp.json`. |
 | `HFAGENT_MCP_CONFIG` | `~/.hfagent/mcp.json` | Override the MCP server file. |
 | `HFAGENT_MCP_TOKENS` | `~/.hfagent/mcp-tokens` | OAuth token directory for remote MCP servers (files are mode `0600`). |
@@ -642,9 +677,97 @@ Enable the Python interpreter that runs ihagent (the venv's `python`, or Termina
 
 Looking at Safari needs **Develop → Allow JavaScript from Apple Events**. A screenshot needs **Screen Recording** for that same Python. If either is missing, the hover reply still runs and iheye prints a one-line hint. Accessibility text for non-browser apps uses the same Accessibility permission as keyboard glances.
 
+## Mouse control
+
+Mouse control lets the agent click, type, and scroll in other applications when you ask. It is off until you turn it on. It does not watch the screen in the background, and it does not take a screenshot unless a tool call needs one.
+
+Install the optional extra (details are in the [macOS](#macos), [Linux](#linux), and [Windows](#windows) sections):
+
+```bash
+pip install -e "ihagent[desktop]"
+```
+
+On macOS that is pyautogui, pynput, and PyObjC. On Windows it adds pywinauto. On Linux it adds `python-xlib`, and the accessibility tree also needs `python3-pyatspi` from the distro.
+
+```text
+/mouse on
+```
+
+Ask in chat, for example "click Save in the front window" or "type hello into the search field". The agent lists the focused app's controls and clicks by id. Turn it off with `/mouse off`.
+
+### How a click is chosen
+
+1. Read the focused app's accessibility tree: macOS Accessibility (AX via PyObjC), Windows UI Automation (pywinauto, or `uiautomation` if that is what is installed), Linux AT-SPI when `pyatspi` imports.
+2. `mouse_elements` returns a short numbered list: role, name, and bounds. The text model picks an id. The click lands on that element's centre.
+3. If the tree is empty, or nothing matches the description, one screenshot of the focused window goes to the vision model. The model returns a point in that image. IHAgent converts it to pointer coordinates.
+
+You can also pass `x` and `y` yourself. A scroll with no target uses the current pointer.
+
+Coordinates keep multi-monitor layouts and HiDPI. The origin is the top-left of the primary display, y grows downward, and a display to the left has a negative x. macOS accessibility and `screencapture` use points; a Retina capture has more pixels than points, and the ratio is read from the PNG rather than assumed. Windows calls per-monitor DPI awareness so UI Automation and the pointer share one space; if Windows has already locked that, both stay in the same space. A vision click always uses the image size against the window rectangle, so a 2x or 1.5x capture still hits the centre. The screenshot path reuses iheye's Screen Recording check on macOS and does not shrink the image with `sips`, which would throw that ratio away.
+
+### Actions
+
+| Tool | Effect |
+| :--- | :--- |
+| `mouse_elements` | Numbered accessibility list. Local. No confirmation prompt. |
+| `mouse_describe` | One screenshot, described by the vision model. Asks first. |
+| `mouse_click` | Click the centre of an element id, a described target, or `x`,`y`. |
+| `mouse_double_click` | Double-click. Same targeting. |
+| `mouse_right_click` | Right-click. Same targeting. |
+| `mouse_move` | Move the pointer. A destination in a screen corner is a stop. |
+| `mouse_scroll` | Scroll. `amount` is positive for up, negative for down. |
+| `mouse_type` | Type text. Refuses a password field. |
+| `mouse_key` | A key or chord such as `enter` or `ctrl+s`. Tab and Escape may leave a password field. Other keys into a password field are refused. |
+
+### Safety
+
+- The tools error until `/mouse on`. Turning it on does not start a capture loop.
+- Each click, move, scroll, key, type, and screen description asks for y/N, even when `/approval auto` is on. `/mouse approval per-task` asks once for that user turn and asks again on the next message.
+- Emergency stop: move the pointer into any screen corner (including the pyautogui corner at `0,0`), or press `ctrl+alt+esc` (change it with `HFAGENT_MOUSE_STOP_HOTKEY`). `/mouse stop` does the same. Further actions refuse until `/mouse on`.
+- The hotkey listener runs only while mouse control is on. It listens for that chord. It does not record other keys.
+- Every action is appended to `~/.hfagent/mouse.log` and shown in the tool result. `/mouse log` prints the recent lines. Set `HFAGENT_MOUSE_LOG` to write somewhere else.
+- Typing into a password field is refused, including a secure text field and an edit control whose name says password. A button named "Change password" is not treated as one.
+
+### Vision model
+
+The default chat model is text-only. Ollama Cloud `gpt-oss:120b` cannot see a screenshot, and neither can the Hugging Face coder default. Set a vision model separately. The base URL and key default to whatever chat backend the session is using (Ollama Cloud, local Ollama, or your Kaggle or Colab OpenAI-compatible `/v1`).
+
+```bash
+# Local Ollama, while chat stays on Ollama Cloud or the Hugging Face router:
+export HFAGENT_VISION_MODEL=qwen2.5vl
+export HFAGENT_VISION_BASE_URL=http://127.0.0.1:11434/v1
+# export HFAGENT_VISION_API_KEY=...   # only if that host requires a key
+
+# Same host as chat (local Ollama, Ollama Cloud, or a notebook tunnel):
+export HFAGENT_VISION_MODEL=qwen2.5vl
+# HFAGENT_VISION_BASE_URL and HFAGENT_VISION_API_KEY are omitted on purpose.
+```
+
+Tags that work on Ollama include `qwen2.5vl`, `gemma3`, and `llama3.2-vision`. On Ollama Cloud, pull a Qwen-VL tag and put that name in `HFAGENT_VISION_MODEL`. A Kaggle or Colab server is just another `/v1` URL in `HFAGENT_VISION_BASE_URL` (or in `HF_BASE_URL` when it should also be the chat host).
+
+The screenshot is sent as an OpenAI `image_url` data URL:
+
+```json
+{"type": "image_url", "image_url": {"url": "data:image/png;base64,..."}}
+```
+
+If the tree cannot be read and no vision model is set, the tool returns those three variables and the example tags. It does not send the picture to the text model. `ihagent --show-config` and `/config` show `vision_model`, `vision_base_url`, and a masked `vision_api_key`.
+
+### Permissions
+
+Missing permission is an error the model can show you, not a crash.
+
+- **macOS Accessibility** — System Settings → Privacy & Security → Accessibility. Enable the Python that runs ihagent. Without it the element list is empty. A vision click can still run if Screen Recording is allowed.
+- **macOS Screen Recording** — System Settings → Privacy & Security → Screen Recording, same Python. Required for the screenshot fallback and for `mouse_describe`. The message matches the iheye hint.
+- **Windows** — install `ihagent[desktop]` so pywinauto is present. The focused app has to expose UI Automation.
+- **Linux** — `sudo apt install python3-pyatspi at-spi2-core` (Fedora: `sudo dnf install python3-pyatspi at-spi2-core`) and a session with the accessibility bus. Wayland can still block screenshots until a portal prompt is accepted.
+
+`/mouse` with no argument prints whether it is on, the approval mode, the stop chord, and which vision model would be used.
+
 ## Approvals and safety
 
 - Writes, shell commands, and SSH commands wait for y/N unless approval is `auto`. The same prompt covers browser form submits, purchases, and executable downloads, and MCP tools whose names write, send, or delete.
+- Desktop mouse actions ask even when approval is `auto`. `/mouse approval per-task` is the only way to confirm a run of them once. They stay off until `/mouse on`. Password fields are refused. See [Mouse control](#mouse-control).
 - The browser profile is separate from your everyday Chrome. A path under the default Chrome user-data directory is rejected.
 - Page text and snapshots are prefixed as untrusted. Instructions on a page are not your instructions. The same rule applies to text iheye attaches from the front app.
 - `/config` and `--show-config` mask secrets. `/model_api=` stores the key and does not echo it.
@@ -729,6 +852,7 @@ A dedicated Hugging Face GPU endpoint is a different host. `scripts/setup-huggin
 | `/browser [close]` | Chrome status, or close the window. |
 | `/mcp` | List MCP servers, status, and tool counts. Subcommands: `add`, `remove`, `login`, `tools`, `reload`, `enable`, `disable`. |
 | `/iheye [on\|off]` | macOS floating bubble. `track on\|off`, `summary on\|off`, and `look on\|off` toggle gaze, the completion card, and one-shot capture. |
+| `/mouse [on\|off]` | Desktop pointer. Off until `on`. `approval per-action\|per-task`, `log`, and `stop`. |
 | `/memory` | Show long-term memory. |
 | `/forget` | Wipe long-term memory. |
 | `/skills` | List coding skills. |
@@ -793,6 +917,15 @@ A dedicated Hugging Face GPU endpoint is a different host. `scripts/setup-huggin
 | `iheye: Safari did not share page text…` | Safari → Develop → Allow JavaScript from Apple Events, then ask again. |
 | `iheye: looking at this window needs Screen Recording permission…` | System Settings → Privacy & Security → Screen Recording, and enable the Python that runs ihagent. |
 | `iheye: keyboard glances need Accessibility permission …` | Pointer tracking still works. System Settings → Privacy & Security → Accessibility, and enable the Python that runs ihagent. |
+| `mouse control is off` | `/mouse on`. The tools do nothing until then, and they do not watch the screen. |
+| `mouse control needs the optional desktop extra` | `pip install 'ihagent[desktop]'` (Windows: double quotes). |
+| `macOS Accessibility permission is off` | System Settings → Privacy & Security → Accessibility. Enable the Python that runs ihagent. |
+| `needs Screen Recording permission` | System Settings → Privacy & Security → Screen Recording. Same Python. Element clicks still work without it. |
+| `Linux accessibility (AT-SPI) is not available` | `sudo apt install python3-pyatspi at-spi2-core` or the Fedora `dnf` equivalent, then use a session with the accessibility bus. |
+| `Windows UI Automation is not available` | `pip install "ihagent[desktop]"`. The focused app has to expose UI Automation. |
+| `no vision model is configured` | Set `HFAGENT_VISION_MODEL` (for example `qwen2.5vl`). Optional `HFAGENT_VISION_BASE_URL` and `HFAGENT_VISION_API_KEY` default to the current chat host. |
+| `refusing to type into a password field` | Expected. Mouse control does not enter secrets. Click a normal field, or press Tab / Escape to leave the password field. |
+| `emergency stop` | The pointer was in a corner, the stop hotkey fired, or you ran `/mouse stop`. `/mouse on` resumes. |
 
 Connection errors name the base URL. `ihagent --show-config` is the first check when the wrong host or the wrong key is in use: a process value copied from `source ~/.hfagent/hf.env` is attributed to that file, so a project `.env` can still override it. Export a different value when the shell should win.
 
@@ -808,7 +941,7 @@ cd ihagent
 pytest
 ```
 
-An editable install from `ihagent/` itself is `pip install -e '.[dev,browser,iheye]'`. The suite covers the agent loop, config precedence, `/url` and fallback, context compaction, reasoning display, browser approvals, the TUI helpers, MCP (in-process stdio server), terminal restore, and iheye focus, hover, summary, skins, and supervisor rules. Those iheye tests do not open AppKit. The overlay itself runs only on macOS. The suite does not launch a live model or a live browser.
+An editable install from `ihagent/` itself is `pip install -e '.[dev,browser,iheye]'`. The suite covers the agent loop, config precedence, `/url` and fallback, context compaction, reasoning display, browser approvals, the TUI helpers, MCP (in-process stdio server), terminal restore, iheye focus, hover, summary, skins, and supervisor rules, and mouse control with mocked accessibility, pointer, and vision calls. Those iheye and mouse tests do not open AppKit, pyautogui, or a display. The overlay itself runs only on macOS. The suite does not launch a live model or a live browser.
 
 ```text
 .
@@ -821,7 +954,7 @@ An editable install from `ihagent/` itself is `pip install -e '.[dev,browser,ihe
 ├── public/
 ├── .hfagent/skills/                   # project skills for this repo
 └── ihagent/
-    ├── pyproject.toml                 # package hfagent; extras browser, iheye, dev
+    ├── pyproject.toml                 # package hfagent; extras browser, iheye, desktop, dev
     ├── README.md                      # short pointer back here
     ├── examples/mcp.json              # preset mcpServers, placeholders only
     ├── scripts/                       # setup-machine, setup-huggingface, serve-local
@@ -837,8 +970,9 @@ An editable install from `ihagent/` itself is `pip install -e '.[dev,browser,ihe
         ├── terminal.py                # mouse-mode and termios restore on exit
         ├── browser.py                 # dedicated Chrome
         ├── iheye/                     # macOS floating overlay (bot, grok, classic, robot)
+        ├── desktop/                   # mouse control (accessibility, vision fallback, safety)
         ├── mcp/                       # MCP client, oauth, ~/.hfagent/mcp.json
-        ├── tools/                     # files, shell, ssh, memory, browser
+        ├── tools/                     # files, shell, ssh, memory, browser, mouse
         ├── ui/                        # Textual TUI and Rich console
         └── builtin_skills/            # SKILL.md recipes loaded by directory name
 ```

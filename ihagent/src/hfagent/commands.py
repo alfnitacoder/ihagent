@@ -48,6 +48,7 @@ HELP = """\
 /browser [action] status of the ihagent Chrome, or close it
 /mcp              MCP servers (status, add, remove, login, tools, reload)
 /iheye [on|off|track|summary|look]  floating eye, hover chat, completion card (macOS)
+/mouse [on|off|approval|log|stop]  desktop pointer (off until you turn it on)
 /forget           wipe long-term memory
 /cloud            use Ollama Cloud (saved for the next launch)
 /local            use Ollama on this PC (saved for the next launch)
@@ -177,6 +178,12 @@ def dispatch_slash(agent: Agent, ui: AgentUI, line: str) -> SlashResult:
         from .iheye import handle_command
 
         ui.on_status(handle_command(arg))
+        return "handled"
+
+    if command == "/mouse":
+        from .desktop import handle_command as handle_mouse
+
+        ui.on_status(handle_mouse(arg))
         return "handled"
 
     if command == "/clear":

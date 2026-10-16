@@ -16,6 +16,8 @@ def test_specs_are_valid_function_specs():
         "browser_new_tab", "browser_close_tab", "browser_read", "browser_click",
         "browser_type", "browser_select", "browser_press", "browser_scroll",
         "browser_screenshot", "browser_wait", "browser_download",
+        "mouse_elements", "mouse_describe", "mouse_click", "mouse_double_click",
+        "mouse_right_click", "mouse_move", "mouse_scroll", "mouse_type", "mouse_key",
     }
     for spec in specs:
         assert spec["type"] == "function"
