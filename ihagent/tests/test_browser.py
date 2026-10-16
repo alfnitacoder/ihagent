@@ -283,16 +283,18 @@ def test_help_lists_browser_command():
     assert "/browser" in HELP
 
 
-def test_install_hint_names_the_extra_and_chrome():
+def test_install_hint_names_the_extra_and_chromium():
     text = install_hint()
     assert "pip install 'hfagent[browser]'" in text
-    assert "playwright install chrome" in text
+    assert "playwright install chromium" in text
+    assert "administrator" in text
+    assert "HFAGENT_BROWSER_CHANNEL=chrome" in text
 
 
 def test_missing_playwright_returns_hint_without_traceback(monkeypatch):
     monkeypatch.setattr("hfagent.browser.playwright_available", lambda: False)
     result = BrowserOpen().run(url="https://example.com")
-    assert "playwright install chrome" in result
+    assert "playwright install chromium" in result
     assert "Traceback" not in result
     assert get_controller().started is False
 
@@ -340,6 +342,21 @@ def test_launch_order_prefers_chrome_then_path_then_chromium(tmp_path):
 def test_launch_order_without_chrome_is_bundled_chromium(tmp_path):
     attempts = launch_attempts(_settings(tmp_path), chrome_path=None)
     assert attempts == [{"label": "chromium"}]
+
+
+def test_explicit_chrome_channel_without_chrome_uses_chromium(tmp_path):
+    settings = _settings(tmp_path, channel="chrome")
+    attempts = launch_attempts(settings, chrome_path=None)
+    assert attempts == [{"label": "chromium"}]
+
+
+def test_explicit_chrome_channel_tries_binary_then_chromium(tmp_path):
+    settings = _settings(tmp_path, channel="chrome")
+    chrome = r"C:\Program Files\Google\Chrome\Application\chrome.exe"
+    attempts = launch_attempts(settings, chrome_path=chrome)
+    assert attempts[0]["channel"] == "chrome"
+    assert attempts[1]["executable_path"] == chrome
+    assert "channel" not in attempts[2] and "executable_path" not in attempts[2]
 
 
 def test_explicit_executable_is_used_alone(tmp_path):
@@ -440,7 +457,7 @@ def test_status_and_slash_do_not_launch(monkeypatch):
     text = browser_command("status")
     assert "not running" in text
     assert "chrome-profile" in text
-    assert "playwright install chrome" in text
+    assert "playwright install chromium" in text
     assert get_controller().started is False
     agent = Agent(Config(api_key="none", base_url="http://127.0.0.1:9/v1", model="t"), default_registry(), SlashRecorder())
     ui = agent.ui
@@ -495,6 +512,31 @@ def test_chrome_channel_wins_when_it_starts(tmp_path, monkeypatch):
     assert len(pw.attempts) == 1
     assert pw.attempts[0]["channel"] == "chrome"
     assert ctrl.launched_label == "chrome"
+    ctrl.close()
+
+
+def test_explicit_chrome_channel_falls_back_to_bundled_chromium(tmp_path, monkeypatch):
+    pw = FakePlaywright()
+    pw.fail_channels.add("chrome")
+    pw.fail_executable = True
+    settings = _settings(tmp_path, channel="chrome")
+    chrome = r"C:\Program Files\Google\Chrome\Application\chrome.exe"
+    ctrl = _controller(tmp_path, monkeypatch, playwright=pw, settings=settings, chrome_path=chrome)
+    ctrl.open_url("https://example.com")
+    assert ctrl.launched_label == "chromium"
+    assert "channel" not in pw.attempts[-1]
+    assert "executable_path" not in pw.attempts[-1]
+    ctrl.close()
+
+
+def test_missing_chrome_channel_launches_bundled_chromium(tmp_path, monkeypatch):
+    settings = _settings(tmp_path, channel="chrome")
+    ctrl = _controller(tmp_path, monkeypatch, settings=settings, chrome_path=None)
+    ctrl.open_url("https://example.com")
+    assert ctrl._pw_fake.attempts[0].get("channel") is None
+    assert "executable_path" not in ctrl._pw_fake.attempts[0]
+    assert ctrl.launched_label == "chromium"
+    assert "chrome channel is not installed" in ctrl.status()
     ctrl.close()
 
 

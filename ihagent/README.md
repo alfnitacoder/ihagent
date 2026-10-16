@@ -9,7 +9,7 @@ From this directory:
 ```bash
 python3 -m venv .venv
 .venv/bin/pip install -e '.[browser,iheye]'
-.venv/bin/playwright install chrome
+.venv/bin/playwright install chromium
 .venv/bin/ihagent
 ```
 

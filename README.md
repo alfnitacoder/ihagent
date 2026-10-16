@@ -37,7 +37,7 @@ The screenshot is a live session on Ollama Cloud (`host` label `cloud`, device `
 
 ## Installation
 
-Python 3.10 through 3.13. Python 3.12 is the one to use. A newer interpreter (for example 3.15) may be missing wheels for Playwright and, on macOS, PyObjC. The installers create a `.venv` in the repository, install the `browser` extra, and on macOS the `iheye` extra. macOS and Linux then run `python -m playwright install chromium`. Windows runs `.venv\Scripts\python -m playwright install chrome`. They write `~/.hfagent/.env` when that file is absent, and put `ihagent` on `PATH`. An existing `~/.hfagent/.env` is never overwritten.
+Python 3.10 or newer. Python 3.12 is the one to use. A newer interpreter (for example 3.15) warns and still runs; current Playwright releases publish 3.15 wheels, and on macOS PyObjC may lag. The installers create a `.venv` in the repository, install the `browser` extra, and on macOS the `iheye` extra. They then run `python -m playwright install chromium` (on Windows, `.venv\Scripts\python.exe -m playwright install chromium`, which does not need administrator rights). They write `~/.hfagent/.env` when that file is absent, and put `ihagent` on `PATH`. An existing `~/.hfagent/.env` is never overwritten.
 
 `iheye` is macOS-only (PyObjC). Linux and Windows install `ihagent[browser]` and leave that extra off.
 
@@ -119,26 +119,38 @@ ihagent
 irm https://raw.githubusercontent.com/alfnitacoder/ihagent/master/install.ps1 | iex
 ```
 
-`py -3.12` is used when the Python install manager has it. The script activates `.venv\Scripts\Activate.ps1`, installs `ihagent[browser]` with double quotes, and runs `.venv\Scripts\python -m playwright install chrome`. `playwright` itself is not on `PATH` outside the venv. `ihagent.cmd` and `hfagent.cmd` shims are written to `%USERPROFILE%\.local\bin`, and that directory is added to the user `PATH` (open a new terminal afterwards).
+From a clone you already have: `powershell -ExecutionPolicy Bypass -File .\install.ps1`.
 
-If a downloaded `install.ps1` or `Activate.ps1` will not run:
+The installer does not activate the virtualenv and never runs `Activate.ps1`. It always calls `.venv\Scripts\python.exe`, so a "running scripts is disabled" execution policy does not block the venv. `ihagent.cmd` and `hfagent.cmd` are written to `%USERPROFILE%\.local\bin`. That directory is added to your user `PATH` and to the current session. `ihagent` works in the window that ran the installer. Open a new terminal so other windows can find it: a new Windows Terminal tab, or Windows PowerShell or Command Prompt from the Start menu.
+
+`py -3.12` is used when the Python install manager has it. Python 3.15 is accepted (the installer prints a warning and continues). If 3.12 is missing, the installer uses the Python you already have. To install 3.12 non-interactively, re-run with `-InstallPython`, which runs `py install --yes 3.12`. From the one-liner, set `$env:IHAGENT_INSTALL_PYTHON = "1"` first. Without that flag it does not try to install Python.
+
+Playwright installs bundled Chromium (`.venv\Scripts\python.exe -m playwright install chromium`). That does not need administrator rights. `playwright install chrome` is optional; on Windows it can fail with "Failed to install Google Chrome" unless you re-run it as Administrator. IHAgent uses Google Chrome when that channel is installed, and bundled Chromium when `HFAGENT_BROWSER_CHANNEL=chrome` points at a Chrome that is not there.
+
+If a saved `install.ps1` will not start because execution policy is Restricted:
 
 ```powershell
-Set-ExecutionPolicy -Scope CurrentUser RemoteSigned
-powershell -ExecutionPolicy Bypass -File .\install.ps1
+powershell -NoProfile -ExecutionPolicy Bypass -File .\install.ps1
 ```
+
+The one-liner from a session that refuses scripts:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -Command "irm https://raw.githubusercontent.com/alfnitacoder/ihagent/master/install.ps1 | iex"
+```
+
+You do not need `Set-ExecutionPolicy` for the virtualenv.
 
 Uninstall: `powershell -ExecutionPolicy Bypass -File .\install.ps1 -Uninstall`.
 
-Manual steps in PowerShell:
+Manual steps in PowerShell. Activation is not required:
 
 ```powershell
 git clone https://github.com/alfnitacoder/ihagent.git
 cd ihagent
 py -3.12 -m venv .venv
-.\.venv\Scripts\Activate.ps1
-python -m pip install -e "ihagent[browser]"
-.\.venv\Scripts\python -m playwright install chrome
+.\.venv\Scripts\python.exe -m pip install -e "ihagent[browser]"
+.\.venv\Scripts\python.exe -m playwright install chromium
 New-Item -ItemType Directory -Force -Path "$env:USERPROFILE\.hfagent" | Out-Null
 if (-not (Test-Path "$env:USERPROFILE\.hfagent\.env")) {
   @"
@@ -149,10 +161,10 @@ HF_BASE_URL=https://router.huggingface.co/v1
 HFAGENT_MODEL=Qwen/Qwen2.5-Coder-32B-Instruct
 "@ | Set-Content -Encoding utf8 "$env:USERPROFILE\.hfagent\.env"
 }
-ihagent
+.\.venv\Scripts\ihagent.exe
 ```
 
-If `Activate.ps1` is blocked, run `Set-ExecutionPolicy -Scope CurrentUser RemoteSigned` and try again. You can skip activation and call `.venv\Scripts\python` and `.venv\Scripts\ihagent.exe` by path.
+If `py -3.12` says no runtime is installed, use the Python you have (`py -3`) or install 3.12 with `py install --yes 3.12`. Python 3.15 is fine.
 
 Manual steps in cmd.exe. cmd does not treat single quotes as quotes, so the bash form of this install fails with:
 
@@ -160,28 +172,30 @@ Manual steps in cmd.exe. cmd does not treat single quotes as quotes, so the bash
 'ihagent[browser,iheye]' is not a valid editable requirement
 ```
 
-Use double quotes, and do not pass `iheye` (macOS only):
+Use double quotes, and do not pass `iheye` (macOS only). `activate.bat` is optional; the commands below call the venv Python by path:
 
 ```cmd
 git clone https://github.com/alfnitacoder/ihagent.git
 cd ihagent
 py -3.12 -m venv .venv
-.venv\Scripts\activate.bat
-python -m pip install -e "ihagent[browser]"
-.venv\Scripts\python -m playwright install chrome
+.venv\Scripts\python.exe -m pip install -e "ihagent[browser]"
+.venv\Scripts\python.exe -m playwright install chromium
 mkdir "%USERPROFILE%\.hfagent"
 notepad "%USERPROFILE%\.hfagent\.env"
-ihagent
+.venv\Scripts\ihagent.exe
 ```
 
 Create `%USERPROFILE%\.hfagent\.env` only when it is not already there. The four lines are the same as the block at the top of this section.
 
 ### Install troubleshooting
 
-- **`playwright` is not recognized**, or **`playwright: command not found`**. The console script lives inside the venv and is not on `PATH` until that venv is active. Activate it (`source .venv/bin/activate`, `.venv\Scripts\Activate.ps1`, or `.venv\Scripts\activate.bat`), or skip the command and call the venv Python: `python -m playwright install chromium`. On Windows that is `.venv\Scripts\python -m playwright install chrome`.
+- **`playwright` is not recognized**, or **`playwright: command not found`**. The console script lives inside the venv and is not on `PATH`. You do not need to activate the venv. Call its Python: `python -m playwright install chromium`. On Windows that is `.venv\Scripts\python.exe -m playwright install chromium`. `playwright install chrome` is optional and may ask for administrator rights.
+- **`running scripts is disabled on this system`**. The installer does not run `Activate.ps1`. Start it with `powershell -ExecutionPolicy Bypass -File .\install.ps1`, or `powershell -ExecutionPolicy Bypass -Command "irm https://raw.githubusercontent.com/alfnitacoder/ihagent/master/install.ps1 | iex"`. You do not need `Set-ExecutionPolicy` to use the virtualenv.
+- **`Failed to install Google Chrome`**, or **re-running as Administrator may help.** `playwright install chrome` needs an administrator on Windows. Use `playwright install chromium`. The Windows installer does that by default. IHAgent falls back to bundled Chromium when the Chrome channel is not installed.
+- **`Test-Path : Illegal characters in path`.** An older `install.ps1` mixed `git pull` output into the install path. Re-run the current script (`irm ... | iex`). It keeps command output off the returned path and, if a path is still illegal, prints those characters instead of calling `Test-Path`.
 - **`iheye` fails to install, or PyObjC will not build, on Linux or Windows.** `iheye` is macOS-only. Install `ihagent[browser]` on Linux and Windows. On macOS, `ihagent[browser,iheye]`.
-- **Python 3.15, or anything newer than 3.13.** Too new for some wheels. Install Python 3.12 and recreate the venv (`python3.12 -m venv .venv`, or `py -3.12 -m venv .venv`).
-- **`ModuleNotFoundError: hfagent.cli`** (also `No module named 'hfagent.cli'`). The `ihagent` on `PATH` is not the venv that has the package. Reinstall with that venv's Python: `.venv/bin/python -m pip install -e "ihagent[browser]"` (macOS: `"ihagent[browser,iheye]"`). On Windows: `.venv\Scripts\python -m pip install -e "ihagent[browser]"`.
+- **Python 3.15, or anything newer than 3.13.** The Windows installer warns and continues. Playwright wheels for 3.15 are published. Python 3.12 is still preferred: `py install --yes 3.12`, or re-run `install.ps1 -InstallPython`. On macOS, recreate the venv with `python3.12` if PyObjC has no wheel yet.
+- **`ModuleNotFoundError: hfagent.cli`** (also `No module named 'hfagent.cli'`). The `ihagent` on `PATH` is not the venv that has the package. Reinstall with that venv's Python: `.venv/bin/python -m pip install -e "ihagent[browser]"` (macOS: `"ihagent[browser,iheye]"`). On Windows: `.venv\Scripts\python.exe -m pip install -e "ihagent[browser]"`.
 
 ## Install and quick start
 
@@ -189,11 +203,13 @@ Platform installers and the same steps by hand are in [Installation](#installati
 
 ```bash
 python3 -m venv .venv
-source .venv/bin/activate          # Windows: .venv\Scripts\activate
+source .venv/bin/activate          # Windows: skip activation; use .venv\Scripts\python.exe
 pip install -e 'ihagent[browser,iheye]'
-playwright install chrome
+playwright install chromium        # Windows: .venv\Scripts\python.exe -m playwright install chromium
 ihagent
 ```
+
+On Windows, do not run `Activate.ps1`. Call `.venv\Scripts\python.exe` for pip and for `playwright install chromium`. Bundled Chromium does not need an administrator. `playwright install chrome` is optional.
 
 `browser` installs Playwright. `iheye` installs PyObjC on macOS (`pyobjc-framework-Cocoa`, plus Quartz and Vision for a one-shot screenshot and OCR). On other platforms that extra is empty and the overlay stays off. cmd.exe does not treat single quotes as quotes, so `pip install -e 'ihagent[browser,iheye]'` there fails with `'ihagent[browser,iheye]' is not a valid editable requirement`. Use double quotes, and skip `iheye` off macOS: `pip install -e "ihagent[browser]"`. Tests use the `dev` extra: `pip install -e 'ihagent[dev,browser,iheye]'`.
 
@@ -311,7 +327,7 @@ The first source that sets a value wins. `ihagent --show-config` and `/config` p
 | `HFAGENT_BROWSER_HEADLESS` | headed | `1` / `true` / `yes` / `on` hides the window. |
 | `HFAGENT_BROWSER_PROFILE` | `~/.hfagent/chrome-profile` | User-data dir. The default Chrome profile is refused. |
 | `HFAGENT_BROWSER_DOWNLOAD_DIR` | `~/Downloads/ihagent` | Downloads and screenshots. |
-| `HFAGENT_BROWSER_CHANNEL` | auto (`chrome`, else Chromium) | Playwright channel, for example `chrome`. |
+| `HFAGENT_BROWSER_CHANNEL` | auto (`chrome`, else Chromium) | Playwright channel. `chrome` falls back to bundled Chromium when Chrome is not installed. |
 | `HFAGENT_BROWSER_EXECUTABLE` | auto | Chrome binary path. Skips channel detection. |
 | `HFAGENT_BROWSER_TIMEOUT_MS` | `30000` | Navigation and action timeout (minimum 1000). |
 | `HFAGENT_BROWSER_MAX_CHARS` | `6000` | Cap for `browser_read` and snapshots (500–12000). |
@@ -445,7 +461,7 @@ A tool run marks iheye as working. On the bot skin that lights the chest and spe
 
 Browser tools use a Chrome profile that belongs to IHAgent, at `~/.hfagent/chrome-profile`. The default Chrome profile is refused. Logins completed in this window stay in the IHAgent profile. The window stays closed until the first browser tool runs, and it closes when you quit or run `/browser close`.
 
-Launch order is installed Google Chrome (`channel=chrome`, then the Chrome executable path), then Playwright's Chromium. The window is headed unless `HFAGENT_BROWSER_HEADLESS` is `1`, `true`, `yes`, or `on`. On Linux the launch adds `--disable-dev-shm-usage`.
+Launch order is installed Google Chrome (`channel=chrome`, then the Chrome executable path), then Playwright's Chromium. If `HFAGENT_BROWSER_CHANNEL=chrome` and Chrome is not installed, that channel is skipped and bundled Chromium is used. The window is headed unless `HFAGENT_BROWSER_HEADLESS` is `1`, `true`, `yes`, or `on`. On Linux the launch adds `--disable-dev-shm-usage`.
 
 `/browser` prints whether Chrome is running, the profile path, and the open tabs, and it does not start the browser. `browser_read` returns compact page text or an accessibility snapshot with `[eN]` refs, truncated at `HFAGENT_BROWSER_MAX_CHARS` (default 6000, clamped to 500–12000). Each read is prefixed so instructions inside the page are not treated as your instructions.
 
@@ -454,8 +470,9 @@ Downloads and screenshots go to `~/Downloads/ihagent`. The tool reply includes t
 If Playwright is missing, the tool returns:
 
 ```text
-Error: browser tools need Playwright and Google Chrome.
-Install with: pip install 'hfagent[browser]' && playwright install chrome
+Error: browser tools need Playwright and Chromium.
+Install with: pip install 'hfagent[browser]' && playwright install chromium
+Bundled Chromium does not need administrator rights. playwright install chrome is optional and, on Windows, may require an administrator prompt. If HFAGENT_BROWSER_CHANNEL=chrome and Chrome is not installed, IHAgent uses bundled Chromium.
 ```
 
 ## MCP servers
@@ -746,17 +763,20 @@ A dedicated Hugging Face GPU endpoint is a different host. `scripts/setup-huggin
 
 | Message | What to do |
 | :--- | :--- |
-| `playwright` is not recognized, or `playwright: command not found` | The console script is inside the venv. Activate `.venv`, or run `python -m playwright`. On Windows: `.venv\Scripts\python -m playwright install chrome`. See [Install troubleshooting](#install-troubleshooting). |
-| `ModuleNotFoundError: hfagent.cli` | The `ihagent` on `PATH` is not the venv that has the package. Reinstall with that venv's Python: `.venv/bin/python -m pip install -e "ihagent[browser]"` (macOS: add `,iheye`). On Windows: `.venv\Scripts\python -m pip install -e "ihagent[browser]"`. |
-| Python 3.15, or newer than 3.13 | Some wheels are missing. Use Python 3.12 (`python3.12`, or `py -3.12`). |
+| `playwright` is not recognized, or `playwright: command not found` | The console script is inside the venv. You do not need to activate it. On Windows: `.venv\Scripts\python.exe -m playwright install chromium`. See [Install troubleshooting](#install-troubleshooting). |
+| `running scripts is disabled on this system` | The installer does not run `Activate.ps1`. Start it with `powershell -ExecutionPolicy Bypass -File .\install.ps1`. |
+| `Failed to install Google Chrome` | Use `playwright install chromium`. It does not need administrator rights. Chrome is optional. |
+| `Test-Path : Illegal characters in path` | Re-run the current `install.ps1`. Git output is no longer part of the install path. |
+| `ModuleNotFoundError: hfagent.cli` | The `ihagent` on `PATH` is not the venv that has the package. Reinstall with that venv's Python: `.venv/bin/python -m pip install -e "ihagent[browser]"` (macOS: add `,iheye`). On Windows: `.venv\Scripts\python.exe -m pip install -e "ihagent[browser]"`. |
+| Python 3.15, or newer than 3.13 | The Windows installer warns and continues. Playwright 3.15 wheels are published. Preferred: `py install --yes 3.12`, or `install.ps1 -InstallPython`. |
 | `'ihagent[browser,iheye]' is not a valid editable requirement` | cmd.exe does not treat single quotes as quotes. Use double quotes, and skip `iheye` off macOS: `pip install -e "ihagent[browser]"`. |
 | `No API key found.` | For the Hugging Face router, `export HF_TOKEN=...` or start the TUI and paste `/model_api=...`. `HF_API_KEY` and `HFAGENT_API_KEY` are also read. |
 | `No Ollama API key found.` | For `https://ollama.com`, set `OLLAMA_API_KEY` or paste `/model_api=...`. |
 | `No Ollama model found.` | `ollama serve`, then `ollama list`, or `ihagent --ollama <model>`. |
 | `textual is required for the TUI.` | `pip install 'textual>=8'`, or run `ihagent --console`. |
-| `Error: browser tools need Playwright and Google Chrome.` | `pip install 'hfagent[browser]' && playwright install chrome` (from this repo: `pip install -e 'ihagent[browser]'`). |
+| `Error: browser tools need Playwright and Chromium.` | `pip install 'hfagent[browser]' && playwright install chromium` (from this repo: `pip install -e 'ihagent[browser]'`). On Windows: `.venv\Scripts\python.exe -m playwright install chromium`. |
 | `Refusing to use the default Chrome profile` | Leave `HFAGENT_BROWSER_PROFILE` at `~/.hfagent/chrome-profile`. |
-| `Could not launch Chrome or Chromium.` | Install Google Chrome, or set `HFAGENT_BROWSER_EXECUTABLE` / `HFAGENT_BROWSER_CHANNEL`. |
+| `Could not launch Chrome or Chromium.` | Run `playwright install chromium`. If `HFAGENT_BROWSER_CHANNEL=chrome` and Chrome is not installed, IHAgent uses bundled Chromium. |
 | `Cannot reach <url>: DNS failure.` | The host name does not resolve. A Cloudflare quick tunnel hostname changes when the tunnel restarts. Update `HF_BASE_URL` or `/url` the new host. |
 | `Cannot reach <url>: TLS failure.` | The certificate or handshake was rejected. |
 | `Cannot reach <url>: timeout.` | The host did not respond in time. Chat requests time out after 120 seconds. `/url` probes time out after 8 seconds. |
@@ -815,6 +835,7 @@ An editable install from `ihagent/` itself is `pip install -e '.[dev,browser,ihe
 ├── README.md                          # this file
 ├── install.sh                         # macOS and Linux installer
 ├── install.ps1                        # Windows installer
+├── tests/install.Tests.ps1            # installer harness (pwsh)
 ├── docs/images/                       # TUI and iheye screenshots
 ├── package.json                       # separate PDF Sentinel web app (not ihagent)
 ├── src/                               # that web app
