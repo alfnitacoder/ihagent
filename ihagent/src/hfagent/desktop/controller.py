@@ -134,8 +134,9 @@ class DesktopController:
     def _guard(self, action: str) -> str | None:
         if not self.session.enabled():
             return (
-                "Error: mouse control is off. It runs only after you ask and "
-                "after /mouse on. Nothing is watching the screen."
+                "Error: mouse control is off. Ask the user to run /mouse on "
+                "in this session, then call this tool again. Nothing is "
+                "watching the screen."
             )
         if self.session.stopped:
             reason = self.session.stop_reason or "emergency stop"

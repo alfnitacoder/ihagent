@@ -182,8 +182,12 @@ def dispatch_slash(agent: Agent, ui: AgentUI, line: str) -> SlashResult:
 
     if command == "/mouse":
         from .desktop import handle_command as handle_mouse
+        from .desktop.prompt_state import toggle_note
 
         ui.on_status(handle_mouse(arg))
+        note = toggle_note(arg)
+        if note:
+            agent.note_mouse_state(note)
         return "handled"
 
     if command == "/clear":

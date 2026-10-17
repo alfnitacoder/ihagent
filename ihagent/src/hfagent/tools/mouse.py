@@ -1,8 +1,11 @@
-"""Desktop pointer tools. They do nothing until the user runs ``/mouse on``.
+"""Desktop pointer tools.
 
-Every action except ``mouse_elements`` asks before it runs, including when
-global approval is ``auto``. Per-task approval (``/mouse approval per-task``)
-asks once for the user turn.
+They return an error until the user runs ``/mouse on``. The description sent
+to the model is rebuilt on every request from that live switch, so a toggle
+in this session is visible without restarting. Every action except
+``mouse_elements`` asks before it runs, including when global approval is
+``auto``. Per-task approval (``/mouse approval per-task``) asks once for the
+user turn.
 """
 
 from __future__ import annotations
@@ -67,6 +70,13 @@ class _MouseTool(Tool):
     action = ""
     force_approval = True
 
+    def spec(self) -> dict[str, Any]:
+        from ..desktop.prompt_state import description_prefix
+
+        body = super().spec()
+        body["function"]["description"] = description_prefix() + self.description
+        return body
+
     def requires_approval(self, **kwargs: Any) -> bool:
         return get_controller().needs_approval(self.action)
 
@@ -97,8 +107,8 @@ class MouseElements(_MouseTool):
     description = (
         "List the focused app's accessibility elements as a numbered list "
         "of role, name, and bounds. Call this only when the user asked to "
-        "look at or control another application. Does nothing while mouse "
-        "control is off (/mouse on). Does not watch the screen in the background."
+        "look at or control another application. Does not watch the screen "
+        "in the background."
     )
     parameters = {"type": "object", "properties": {}}
 
@@ -109,7 +119,7 @@ class MouseDescribe(_MouseTool):
     description = (
         "Describe the focused window by sending one screenshot to the vision "
         "model. Call this only when the user asked what is on screen. "
-        "Requires /mouse on. Does not run on a timer."
+        "Does not run on a timer."
     )
     parameters = _schema(
         {"question": {"type": "string", "description": "What to ask about the screen."}},
@@ -124,8 +134,7 @@ class MouseClick(_MouseTool):
         "Click the focused app. Prefer element, an id from mouse_elements; "
         "the click hits the centre of that element. target is a description "
         "used when the accessibility tree is empty or has no match. "
-        "Only when the user asked to click something. Requires /mouse on. "
-        "Asks before it runs."
+        "Only when the user asked to click something. Asks before it runs."
     )
     parameters = _schema()
 
@@ -135,8 +144,7 @@ class MouseDoubleClick(_MouseTool):
     action = "double_click"
     description = (
         "Double-click. Same targeting as mouse_click (element id, then "
-        "target description, then x and y). Only when the user asked. "
-        "Requires /mouse on."
+        "target description, then x and y). Only when the user asked."
     )
     parameters = _schema()
 
@@ -145,8 +153,7 @@ class MouseRightClick(_MouseTool):
     name = "mouse_right_click"
     action = "right_click"
     description = (
-        "Right-click. Same targeting as mouse_click. Only when the user "
-        "asked. Requires /mouse on."
+        "Right-click. Same targeting as mouse_click. Only when the user asked."
     )
     parameters = _schema()
 
@@ -156,8 +163,7 @@ class MouseMove(_MouseTool):
     action = "move"
     description = (
         "Move the pointer. Same targeting as mouse_click. Moving into a "
-        "screen corner is an emergency stop. Only when the user asked. "
-        "Requires /mouse on."
+        "screen corner is an emergency stop. Only when the user asked."
     )
     parameters = _schema()
 
@@ -168,7 +174,7 @@ class MouseScroll(_MouseTool):
     description = (
         "Scroll at an element, a described target, or the current pointer. "
         "amount is positive for up and negative for down. Only when the "
-        "user asked. Requires /mouse on."
+        "user asked."
     )
     parameters = _schema(
         {
@@ -185,8 +191,7 @@ class MouseType(_MouseTool):
     action = "type"
     description = (
         "Type text into the focused field, or into element / target first. "
-        "Refuses password fields. Only when the user asked to type. "
-        "Requires /mouse on."
+        "Refuses password fields. Only when the user asked to type."
     )
     parameters = _schema(
         {"text": {"type": "string", "description": "Text to type. Not accepted in a password field."}},
@@ -200,7 +205,7 @@ class MouseKey(_MouseTool):
     description = (
         "Press a key or hotkey, for example enter or ctrl+s. Refuses to "
         "type into a password field (tab and escape are still allowed). "
-        "Only when the user asked. Requires /mouse on."
+        "Only when the user asked."
     )
     parameters = {
         "type": "object",

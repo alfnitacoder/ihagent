@@ -437,6 +437,16 @@ def _bare_json_calls(content: str) -> tuple[list[dict], str]:
     return calls, "".join(kept)
 
 
+def _mouse_status() -> str:
+    """Live /mouse switch. Rebuilt on every system prompt, including a toggle."""
+    try:
+        from .desktop.prompt_state import standing_instructions
+
+        return "Mouse status: " + standing_instructions()
+    except Exception:
+        return "Mouse status: mouse control state is unavailable."
+
+
 def _shell_rules() -> str:
     system = platform.system()
     if system == "Windows":
@@ -470,7 +480,7 @@ def system_prompt(base_url: str = "") -> str:
         f"Environment: {platform.system()} {platform.release()}, "
         f"cwd={Path.cwd()}"
     )
-    parts = [env, _shell_rules(), SYSTEM_PROMPT]
+    parts = [env, _shell_rules(), SYSTEM_PROMPT, _mouse_status()]
     # Anthropic's content filter rejects the entire request when the system
     # prompt carries flagged material. The user's persistent memory can hold
     # offensive-security notes, so omit it on the Claude host (it stays
@@ -667,6 +677,22 @@ class Agent:
             {"role": "system", "content": system_prompt(self.config.base_url)}
         ]
         self.session_name = None
+
+    def note_mouse_state(self, text: str) -> None:
+        """Record a /mouse toggle and rebuild the system prompt from the live switch.
+
+        The slash command itself does not start a model turn. The note is what
+        the next turn reads, including a request the user already made.
+        """
+        note = str(text or "").strip()
+        if not note:
+            return
+        refreshed = {"role": "system", "content": system_prompt(self.config.base_url)}
+        if self.messages and self.messages[0].get("role") == "system":
+            self.messages[0] = refreshed
+        else:
+            self.messages.insert(0, refreshed)
+        self.messages.append({"role": "user", "content": note})
 
     # ------------------------------------------------------------------- loop
 

@@ -696,6 +696,8 @@ On macOS that is pyautogui, pynput, and PyObjC. On Windows it adds pywinauto. On
 
 Ask in chat, for example "click Save in the front window" or "type hello into the search field". The agent lists the focused app's controls and clicks by id. Turn it off with `/mouse off`.
 
+`/mouse on`, `/mouse off`, `/mouse stop`, and `/mouse overlay on|off` rewrite the system prompt and add a note the model reads on its next turn. While mouse control is on, each `mouse_*` tool description says to call the tool. While it is off, calling one tells the model to ask you to run `/mouse on`. Opening a page does not need the pointer: on macOS the agent runs `open -a Safari https://mail.google.com` (or `open <url>`), on Linux `xdg-open <url>`, and on Windows `start "" <url>`.
+
 ### How a click is chosen
 
 1. Read the focused app's accessibility tree: macOS Accessibility (AX via PyObjC), Windows UI Automation (pywinauto, or `uiautomation` if that is what is installed), Linux AT-SPI when `pyatspi` imports.
@@ -722,7 +724,7 @@ Coordinates keep multi-monitor layouts and HiDPI. The origin is the top-left of 
 
 ### Safety
 
-- The tools error until `/mouse on`. Turning it on does not start a capture loop.
+- The tools error until `/mouse on`, and that error tells the model to ask you to run it. Turning it on does not start a capture loop, and it does not by itself start a new model turn. The next reply sees that mouse control is on.
 - Each click, move, scroll, key, type, and screen description asks for y/N, even when `/approval auto` is on. `/mouse approval per-task` asks once for that user turn and asks again on the next message.
 - Emergency stop: move the pointer into any screen corner (including the pyautogui corner at `0,0`), or press `ctrl+alt+esc` (change it with `HFAGENT_MOUSE_STOP_HOTKEY`). `/mouse stop` does the same. Further actions refuse until `/mouse on`.
 - The hotkey listener runs only while mouse control is on. It listens for that chord. It does not record other keys.
@@ -930,7 +932,7 @@ A dedicated Hugging Face GPU endpoint is a different host. `scripts/setup-huggin
 | `iheye: Safari did not share page text…` | Safari → Develop → Allow JavaScript from Apple Events, then ask again. |
 | `iheye: looking at this window needs Screen Recording permission…` | System Settings → Privacy & Security → Screen Recording, and enable the Python that runs ihagent. |
 | `iheye: keyboard glances need Accessibility permission …` | Pointer tracking still works. System Settings → Privacy & Security → Accessibility, and enable the Python that runs ihagent. |
-| `mouse control is off` | `/mouse on`. The tools do nothing until then, and they do not watch the screen. |
+| `mouse control is off` | `/mouse on`. The tool result tells the model to ask you for that. The next turn is told mouse control is on. Nothing watches the screen while it is off. |
 | `mouse control needs the optional desktop extra` | `pip install 'ihagent[desktop]'` (Windows: double quotes). |
 | `macOS Accessibility permission is off` | System Settings → Privacy & Security → Accessibility. Enable the Python that runs ihagent. |
 | `needs Screen Recording permission` | System Settings → Privacy & Security → Screen Recording. Same Python. Element clicks still work without it. |
