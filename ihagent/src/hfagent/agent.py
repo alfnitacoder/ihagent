@@ -471,6 +471,9 @@ def system_prompt(base_url: str = "") -> str:
         f"cwd={Path.cwd()}"
     )
     parts = [env, _shell_rules(), SYSTEM_PROMPT]
+    google_note = _signed_in_google_note()
+    if google_note:
+        parts.append(google_note)
     # Anthropic's content filter rejects the entire request when the system
     # prompt carries flagged material. The user's persistent memory can hold
     # offensive-security notes, so omit it on the Claude host (it stays
@@ -487,6 +490,14 @@ def system_prompt(base_url: str = "") -> str:
         parts.append(skills)
     return "\n\n".join(parts)
 
+
+def _signed_in_google_note() -> str:
+    try:
+        from .mcp.google_oauth import signed_in_google_note
+
+        return signed_in_google_note()
+    except Exception:
+        return ""
 
 
 def _steer_parts(parts: list) -> list:

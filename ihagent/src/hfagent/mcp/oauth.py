@@ -87,28 +87,42 @@ def storage_for(name: str, directory: Path | None = None) -> FileTokenStorage:
 
 
 class LoopbackCallback:
-    """Local /callback that the browser is redirected to after consent."""
+    """Local redirect that the browser hits after consent.
 
-    def __init__(self, timeout: float = 240.0) -> None:
+    Remote MCP OAuth uses ``/callback``. Google Desktop clients use the
+    loopback origin itself (``/``). ``paths`` selects which paths count.
+    """
+
+    def __init__(self, timeout: float = 240.0, paths: tuple[str, ...] = ("/callback",)) -> None:
         self.timeout = timeout
+        self.paths = tuple(paths) if paths else ("/callback",)
         self.port = 0
         self._queue: Queue[tuple[str, str, str | None, str]] = Queue()
         self._httpd: ThreadingHTTPServer | None = None
         self._thread: threading.Thread | None = None
 
     @property
+    def origin(self) -> str:
+        return f"http://127.0.0.1:{self.port}"
+
+    @property
     def redirect_uri(self) -> str:
-        return f"http://127.0.0.1:{self.port}/callback"
+        return f"{self.origin}/callback"
 
     def start(self) -> None:
         if self._httpd is not None:
             return
         queue = self._queue
+        allowed: set[str] = set()
+        for item in self.paths:
+            path = item if str(item).startswith("/") else "/" + str(item)
+            allowed.add(path or "/")
 
         class Handler(BaseHTTPRequestHandler):
             def do_GET(self) -> None:  # noqa: N802
                 parsed = urlparse(self.path)
-                if parsed.path != "/callback":
+                path = parsed.path or "/"
+                if path not in allowed:
                     body = b"not found"
                     self.send_response(404)
                 else:
@@ -149,6 +163,13 @@ class LoopbackCallback:
         self._thread = None
         if thread is not None and thread is not threading.current_thread():
             thread.join(timeout=1)
+
+    def wait_sync(self) -> tuple[str, str, str | None, str]:
+        """Block until the browser hits the callback. Used by Google sign-in."""
+        try:
+            return self._queue.get(timeout=self.timeout)
+        except Empty as exc:
+            raise TimeoutError("timed out waiting for the browser sign-in") from exc
 
     async def wait_result(self) -> Any:
         from mcp.shared.auth import AuthorizationCodeResult

@@ -4,8 +4,6 @@
       "command": "uvx",
       "args": ["workspace-mcp", "--tools", "gmail", "drive", "calendar", "--tool-tier", "core"],
       "env": {
-        "GOOGLE_OAUTH_CLIENT_ID": "YOUR_CLIENT_ID.apps.googleusercontent.com",
-        "GOOGLE_OAUTH_CLIENT_SECRET": "YOUR_CLIENT_SECRET",
         "OAUTHLIB_INSECURE_TRANSPORT": "1"
       }
     },

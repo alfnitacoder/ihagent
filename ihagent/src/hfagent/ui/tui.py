@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import queue
 import shutil
@@ -1363,7 +1364,12 @@ class HfAgentApp(App):
         self._start_turn(text if prompt is None else prompt)
 
     async def _handle_slash(self, text: str) -> None:
-        result = dispatch_slash(self.agent, self.agent.ui, text)
+        # /mcp sign-in blocks on the browser. Run it off the UI thread so
+        # status lines paint while the loopback redirect is still open.
+        if text.lstrip().lower().startswith("/mcp"):
+            result = await asyncio.to_thread(dispatch_slash, self.agent, self.agent.ui, text)
+        else:
+            result = dispatch_slash(self.agent, self.agent.ui, text)
         parts = text.split(maxsplit=1)
         command = parts[0].lower()
         arg = parts[1] if len(parts) > 1 else ""

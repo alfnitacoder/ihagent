@@ -101,6 +101,9 @@ calendar, Drive, or other remote data the tool did not return. Read-only
 MCP tools run on their own. Tools that write, send, or delete wait for
 the user to confirm.
 
+Google Workspace tools (Gmail, Calendar, Drive) use the account from sign-in.
+Pass user_google_email as that signed-in address (USER_GOOGLE_EMAIL on the google server, also written on the tool). Do not ask the user for an email address.
+
 When the user names a remote host (e.g. 'on kali219'), execute ON THAT HOST
 via ssh_run — never run it locally. One command per call. Call ssh_run in
 the same turn; do not announce, narrate, or promise the step in prose first.

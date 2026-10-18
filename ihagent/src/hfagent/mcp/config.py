@@ -316,20 +316,18 @@ def build_preset(preset: str, name: str, positionals: list[str], flags: dict[str
     return parse_server(name, body)
 
 
+def is_google_workspace(config: ServerConfig) -> bool:
+    blob = " ".join([config.command, *config.args]).lower()
+    return "workspace-mcp" in blob
+
+
 def preset_note(preset: str, config: ServerConfig) -> str:
     if preset == "google":
-        missing = []
-        if "GOOGLE_OAUTH_CLIENT_ID" not in config.env:
-            missing.append("GOOGLE_OAUTH_CLIENT_ID")
-        if "GOOGLE_OAUTH_CLIENT_SECRET" not in config.env:
-            missing.append("GOOGLE_OAUTH_CLIENT_SECRET")
-        note = (
-            "Sign-in opens in the browser the first time a Gmail, Calendar, "
-            "or Drive tool runs."
-        )
-        if missing:
-            note += " Missing " + " and ".join(missing) + ". Pass --client-id and --client-secret, or export them."
-        return note
+        if "GOOGLE_OAUTH_CLIENT_ID" not in config.env or "GOOGLE_OAUTH_CLIENT_SECRET" not in config.env:
+            from .google_oauth import PLACEHOLDER_MESSAGE
+
+            return PLACEHOLDER_MESSAGE
+        return ""
     if preset == "github" and "GITHUB_PERSONAL_ACCESS_TOKEN" not in config.env:
         return "Set GITHUB_PERSONAL_ACCESS_TOKEN (--token or the environment) before GitHub tools will answer."
     if preset == "filesystem":
@@ -341,16 +339,8 @@ def preset_note(preset: str, config: ServerConfig) -> str:
 
 
 def _preset_google(flags: dict[str, Any]) -> dict[str, Any]:
-    env: dict[str, str] = {"OAUTHLIB_INSECURE_TRANSPORT": "1"}
-    client_id = str(flags.get("client_id") or user_setting("GOOGLE_OAUTH_CLIENT_ID"))
-    secret = str(flags.get("client_secret") or user_setting("GOOGLE_OAUTH_CLIENT_SECRET"))
-    email = user_setting("USER_GOOGLE_EMAIL") or user_setting("GOOGLE_USER_EMAIL")
-    if client_id:
-        env["GOOGLE_OAUTH_CLIENT_ID"] = client_id
-    if secret:
-        env["GOOGLE_OAUTH_CLIENT_SECRET"] = secret
-    if email:
-        env["USER_GOOGLE_EMAIL"] = email
+    from .google_oauth import google_preset_env
+
     return {
         "command": "uvx",
         "args": [
@@ -362,7 +352,7 @@ def _preset_google(flags: dict[str, Any]) -> dict[str, Any]:
             "--tool-tier",
             "core",
         ],
-        "env": env,
+        "env": google_preset_env(flags),
     }
 
 
