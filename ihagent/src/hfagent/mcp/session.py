@@ -21,12 +21,14 @@ from typing import Any
 from ..tools.base import Tool, ToolRegistry
 from .config import (
     ServerConfig,
+    is_google_workspace,
     load_servers,
     log_dir,
     mcp_disabled,
     save_servers,
     token_dir,
 )
+from .google_oauth import apply_google_account_hint, google_tool_hint
 from .oauth import AuthRequired, LoopbackCallback, build_provider, storage_for
 
 _MUTATING = re.compile(
@@ -840,6 +842,10 @@ class McpHub:
             text = str(getattr(tool, "description", "") or remote_name).strip()
             if len(text) > 400:
                 text = text[:400] + "…"
+            params = parameters_of(tool)
+            if is_google_workspace(cfg):
+                text += google_tool_hint(cfg.env)
+                params = apply_google_account_hint(params, cfg.env)
             mark = " Read-only." if not needs else " Requires user approval before it runs."
             built.append(
                 McpTool(
@@ -848,7 +854,7 @@ class McpHub:
                     remote_name,
                     name,
                     f"[mcp {cfg.name}] {text}{mark}",
-                    parameters_of(tool),
+                    params,
                     needs,
                     cfg.call_timeout,
                 )

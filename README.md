@@ -528,13 +528,16 @@ Startup does not block the TUI. A server that fails to spawn, crashes, or return
 | `/mcp` | Name, status (`ready`, `connecting`, `login`, `error`, `disabled`), tool count, and how it is launched. |
 | `/mcp add <name>` | Add a preset, a URL, or a stdio command, then connect. |
 | `/mcp remove <name>` | Disconnect and delete that server from `mcp.json`. |
-| `/mcp login <name>` | Browser sign-in for a remote server that uses MCP OAuth. |
+| `/mcp login <name>` | Browser sign-in. For Google this starts immediately. For a remote HTTP server it runs MCP OAuth. |
+| `/mcp logout <name>` | Delete saved tokens. Google tokens are removed from the workspace-mcp credential directory. |
 | `/mcp tools [name]` | List exposed tools and whether each one is read-only or waits for approval. |
 | `/mcp reload` | Re-read `mcp.json` and reconnect enabled servers. |
 | `/mcp enable <name>` / `/mcp disable <name>` | Connect or disconnect without deleting the entry. |
 
 ```text
-/mcp add google --client-id ID.apps.googleusercontent.com --client-secret SECRET
+/mcp add google
+/mcp login google
+/mcp logout google
 /mcp add filesystem ~/code
 /mcp add github --token ghp_...
 /mcp add fetch
@@ -552,23 +555,61 @@ The preset uses [workspace-mcp](https://github.com/taylorwilsdon/google_workspac
 uvx workspace-mcp --tools gmail drive calendar --tool-tier core
 ```
 
-`uvx` downloads it on first run (Python 3.10+ and [uv](https://docs.astral.sh/uv/)). You do not clone the repo. Auth is Google's OAuth in your browser, performed by workspace-mcp, not by pasting a token into the chat.
+`uvx` downloads it on first run (Python 3.10+ and [uv](https://docs.astral.sh/uv/)). You do not clone the repo.
 
-1. In [Google Cloud Console](https://console.cloud.google.com/), create or select a project.
-2. Enable the Gmail API, Google Drive API, and Google Calendar API (the same project as the OAuth client).
-3. Configure the OAuth consent screen. If the app stays in testing, add the Google account you will sign in with as a test user. The account `alffy.george@gmail.com` is only an example of that address — use your own, and do not commit it.
-4. Create an OAuth client ID of type **Desktop app**. Copy the client id and secret. Desktop clients do not need a redirect URI filled in by hand.
-5. In ihagent:
+```text
+/mcp add google
+```
+
+That is the whole setup for an end user. IHAgent opens the system browser to Google's consent screen, catches the redirect on `127.0.0.1`, and stores the tokens. You do not paste a client id, a client secret, or your email address. The same browser flow runs again on `/mcp login google`. macOS, Linux, and Windows all use the loopback address and the default browser.
+
+Sign-in has about three minutes to finish. If it times out, or you close the tab, the command says so and the server stays in `mcp.json`. Run `/mcp login google` to try again. Nothing from the token response is printed.
+
+After consent, IHAgent reads the account email from the id token (or Google's userinfo endpoint) and saves it as `USER_GOOGLE_EMAIL` on the google server in `~/.hfagent/mcp.json` and in `~/.hfagent/.env`. Workspace tools are told to pass that address as `user_google_email`. The model is instructed not to ask you for an email.
+
+Tokens are written as workspace-mcp credential JSON under `~/.hfagent/mcp-tokens/google-workspace/` (file mode `0600`, directory `0700`). The google server's env sets `WORKSPACE_MCP_CREDENTIALS_DIR` to that folder, so workspace-mcp reads the same files. `/mcp logout google` deletes them and clears the saved email. `/mcp remove google` does the same and drops the server entry.
+
+`/mcp add google` limits the server to Gmail, Drive, and Calendar at the `core` tool tier so a 64K context is not filled with every Workspace API. Narrow it further in `mcp.json` with `"tools": ["search_gmail_messages", "get_events"]` or `"maxTools": 12`.
+
+Optional override, if you want your own Google Cloud client instead of the one shipped with IHAgent. Flags win, then the environment, then the bundled client:
 
 ```text
 /mcp add google --client-id YOUR_ID.apps.googleusercontent.com --client-secret YOUR_SECRET
 ```
 
-Or export `GOOGLE_OAUTH_CLIENT_ID` and `GOOGLE_OAUTH_CLIENT_SECRET` (or put them in `~/.hfagent/.env`) and run `/mcp add google`. Optional: `USER_GOOGLE_EMAIL=alffy.george@gmail.com` tells workspace-mcp which account to prefer. Replace that example with your own address. IHAgent does not hardcode it.
+Or export `GOOGLE_OAUTH_CLIENT_ID` and `GOOGLE_OAUTH_CLIENT_SECRET` (or put both in `~/.hfagent/.env`) and run `/mcp add google`. You still do not set `USER_GOOGLE_EMAIL` yourself unless you want to hint which account the browser should offer. Sign-in replaces it with the account you actually approved.
 
-6. Ask for something that needs mail, calendar, or Drive. The first call opens a browser. Sign in with your Google account and approve access. workspace-mcp stores those Google tokens in its own credential store. `/mcp login google` prints this reminder; it does not send your password anywhere.
+If the package still has the placeholder client, `/mcp add google` does not open a browser. It prints one line: the bundled client is still a placeholder, and a maintainer has to paste a Desktop client into `hfagent/mcp/google_client.json`.
 
-`/mcp add google` limits the server to Gmail, Drive, and Calendar at the `core` tool tier so a 64K context is not filled with every Workspace API. Narrow it further in `mcp.json` with `"tools": ["search_gmail_messages", "get_events"]` or `"maxTools": 12`.
+#### Maintainer: built-in Google client
+
+Do this once, then ship the file. End users never do these steps. Google documents the client secret of an installed app as non-confidential: it is embedded in the app. Use a **Desktop app** client, not a Web client. See [OAuth 2.0 for Mobile & Desktop Apps](https://developers.google.com/identity/protocols/oauth2/native-app).
+
+1. Open [Google Cloud Console](https://console.cloud.google.com/) and create or select a project.
+2. Enable the **Gmail API**, **Google Drive API**, and **Google Calendar API** on that project (APIs & Services → Library).
+3. Configure the OAuth consent screen: User type **External**, publishing status **Testing**. Under Test users, add every Google account that will sign in while the app stays in testing.
+4. APIs & Services → Credentials → Create credentials → OAuth client ID. Application type: **Desktop app**. Desktop clients do not need a redirect URI filled in by hand. Copy the client id and the client secret.
+5. Paste them into `ihagent/src/hfagent/mcp/google_client.json` and set `"placeholder": false`:
+
+```json
+{
+  "client_id": "YOUR_ID.apps.googleusercontent.com",
+  "client_secret": "YOUR_SECRET",
+  "placeholder": false
+}
+```
+
+Or, from a build environment that already has the two variables exported (they are not printed):
+
+```bash
+export GOOGLE_OAUTH_CLIENT_ID="YOUR_ID.apps.googleusercontent.com"
+export GOOGLE_OAUTH_CLIENT_SECRET="YOUR_SECRET"
+python -m hfagent.mcp.google_oauth --bake
+```
+
+`--bake` writes that same JSON file. A packager can instead assign `BUILD_GOOGLE_OAUTH_CLIENT_ID` and `BUILD_GOOGLE_OAUTH_CLIENT_SECRET` in `ihagent/src/hfagent/mcp/google_oauth.py` before building. Those constants win over the JSON file. Flags and `GOOGLE_OAUTH_CLIENT_ID` / `GOOGLE_OAUTH_CLIENT_SECRET` in the user's environment or `~/.hfagent/.env` win over both.
+
+While the consent screen stays in Testing, Google only allows the test users you listed. Moving the app to production is a separate verification step and is not required for a Desktop client used by those accounts.
 
 ### Other presets
 
@@ -582,7 +623,7 @@ Or export `GOOGLE_OAUTH_CLIENT_ID` and `GOOGLE_OAUTH_CLIENT_SECRET` (or put them
 
 For an HTTP MCP server that returns 401, `/mcp login <name>` runs the MCP authorization flow from the official Python SDK: protected-resource discovery, dynamic client registration, PKCE, and refresh. A tab opens on `127.0.0.1` and the redirect lands on a local `/callback`. Tokens and the registered client record are stored in `~/.hfagent/mcp-tokens/<name>.json` (file mode `0600`, directory `0700`). The next launch refreshes without a browser until the refresh token is rejected. Set `"oauth": true` (or `"oauth": {"scope": "user"}`) in `mcp.json` to do the same without the slash command.
 
-This is separate from Google sign-in. workspace-mcp's stdio preset talks to Google itself. MCP OAuth is how IHAgent authenticates to a remote MCP server.
+This is separate from Google sign-in. `/mcp login google` runs the Desktop OAuth flow above and writes workspace-mcp's credential files. MCP OAuth is how IHAgent authenticates to a remote MCP server.
 
 ### Approvals and context
 
@@ -922,11 +963,12 @@ A dedicated Hugging Face GPU endpoint is a different host. `scripts/setup-huggin
 | `iheye failed to start: …` | The helper could not be spawned. The message includes the OS error. |
 | `usage: /iheye on\|off \| track on\|off \| summary on\|off \| look on\|off` | `/iheye track`, `/iheye summary`, and `/iheye look` take `on` or `off`. |
 | `mcp <name>: …` / server status `error` | The process did not start or the handshake failed. Read `~/.hfagent/mcp-logs/<name>.log`. Check `command` is on `PATH` (`uvx`, `npx`). |
-| `sign in with /mcp login <name>` | A remote server returned 401. `/mcp login <name>` opens the browser. For Google, use `/mcp add google` and approve the first tool call instead. |
-| `timed out waiting for the browser sign-in` | The local callback got nothing. Open the URL printed above `/mcp login` and finish consent. |
+| `sign in with /mcp login <name>` | A remote server returned 401. `/mcp login <name>` opens the browser. For Google, `/mcp add google` and `/mcp login google` open it immediately. |
+| `Google sign-in timed out` / `timed out waiting for the browser sign-in` | The local callback got nothing within about three minutes. Run `/mcp login google` again, or open the sign-in page the command printed if the browser did not. |
+| `Bundled Google OAuth client is still a placeholder` | The shipped `google_client.json` has not been replaced. A maintainer pastes a Desktop client (see above). Users can still pass `--client-id` and `--client-secret`. |
 | `MCP support needs the mcp package` | `pip install 'mcp>=2'` or reinstall `ihagent`. |
 | MCP tool missing from `/tools` | The server is `disabled`, still `connecting`, or filtered by `tools` / `maxTools`. `/mcp tools <name>` shows what was registered. |
-| Google tool returns an OAuth or API error | Desktop client id/secret must be the env on that server. Enable Gmail, Drive, and Calendar in the same Cloud project, and add your account as a test user while the consent screen is in testing. |
+| Google tool returns an OAuth or API error | Run `/mcp login google` again. The maintainer's Cloud project must have Gmail, Drive, and Calendar enabled, and the signed-in account must be a test user while the consent screen is in testing. Tokens live under `~/.hfagent/mcp-tokens/google-workspace/`. |
 | `iheye: Safari did not share page text…` | Safari → Develop → Allow JavaScript from Apple Events, then ask again. |
 | `iheye: looking at this window needs Screen Recording permission…` | System Settings → Privacy & Security → Screen Recording, and enable the Python that runs ihagent. |
 | `iheye: keyboard glances need Accessibility permission …` | Pointer tracking still works. System Settings → Privacy & Security → Accessibility, and enable the Python that runs ihagent. |

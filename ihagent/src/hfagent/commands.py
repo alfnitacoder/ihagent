@@ -46,7 +46,7 @@ HELP = """\
 /memory           show what the agent remembers long-term
 /skills           list coding skills (builtin + ~/.hfagent/skills)
 /browser [action] status of the ihagent Chrome, or close it
-/mcp              MCP servers (status, add, remove, login, tools, reload)
+/mcp              MCP servers (status, add, remove, login, logout, tools, reload)
 /iheye [on|off|track|summary|look]  floating eye, hover chat, completion card (macOS)
 /mouse [on|off|overlay|approval|log|stop]  desktop pointer and ihmouse overlay
 /forget           wipe long-term memory

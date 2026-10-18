@@ -1,0 +1,6 @@
+{
+  "client_id": "PLACEHOLDER.apps.googleusercontent.com",
+  "client_secret": "PLACEHOLDER",
+  "placeholder": true,
+  "note": "Desktop app OAuth client. Google documents this secret as non-confidential for installed apps. Replace client_id and client_secret, set placeholder to false, and ship the file. Steps are in the README under 'Maintainer: built-in Google client'."
+}

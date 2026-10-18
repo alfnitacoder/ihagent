@@ -114,7 +114,13 @@ def test_presets_do_not_hardcode_an_account(monkeypatch):
     assert "--tool-tier" in google.args and "core" in google.args
     blob = json.dumps(google.to_json())
     assert "alffy.george@gmail.com" not in blob
-    assert "GOOGLE_OAUTH_CLIENT_ID" not in google.env
+    from hfagent.mcp.google_oauth import load_bundled_google_client
+
+    bundled = load_bundled_google_client()
+    if bundled.placeholder:
+        assert "GOOGLE_OAUTH_CLIENT_ID" not in google.env
+    else:
+        assert google.env["GOOGLE_OAUTH_CLIENT_ID"] == bundled.client_id
     files = build_preset("filesystem", "filesystem", ["/tmp/notes"], {})
     assert files.args[-1] == "/tmp/notes"
     assert "@modelcontextprotocol/server-filesystem" in files.args
