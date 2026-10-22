@@ -246,6 +246,13 @@ def run_appkit(parent_pid: int) -> int:
             self._front_tick = 0
             return self
 
+        # PyObjC registers ``_show`` as the selector ``_show`` (zero arguments).
+        # The callable takes ``panel``, so creating this class raises
+        # ``'_show' expects 0 arguments ... has 1 positional arguments`` and
+        # the panel is never ordered front. ``python_method`` keeps helpers
+        # off that table. Names with an internal underscore (``_match_scale``)
+        # are already skipped, and are marked the same way.
+        @objc.python_method
         def _close_panels(self):
             for panel, _view in self.panels:
                 try:
@@ -256,6 +263,7 @@ def run_appkit(parent_pid: int) -> int:
             self.panels = []
             self.runner.view_monitors = {}
 
+        @objc.python_method
         def _show(self, panel) -> None:
             panel.setLevel_(self.level)
             panel.orderFrontRegardless()
@@ -265,6 +273,7 @@ def run_appkit(parent_pid: int) -> int:
             except Exception:
                 pass
 
+        @objc.python_method
         def _match_scale(self, view) -> None:
             try:
                 window = view.window()

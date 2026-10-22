@@ -1,6 +1,9 @@
 """ihmouse overlay with the GUI mocked. No display, no AppKit, no Qt."""
 
+import ast
+import keyword
 import sys
+from pathlib import Path
 
 import pytest
 
@@ -511,6 +514,131 @@ def test_slash_overlay_persists_and_hides(monkeypatch, tmp_path):
     report = format_config_report(Config.load())
     assert "mouse_overlay=" in report
     assert "ihmouse" in SYSTEM_PROMPT
+
+
+# PyObjC 9+ (this project requires 11) turns a Python method on an NSObject
+# subclass into a selector unless the name has an internal underscore or the
+# method is marked ``objc.python_method``. The colon count of that selector
+# must match the callable. ``_show(self, panel)`` becomes selector ``_show``
+# and raises BadPrototypeError while the class is created.
+_OBJC_ROOTS = {
+    "NSObject",
+    "NSView",
+    "NSPanel",
+    "NSWindow",
+    "NSTextField",
+    "NSTextView",
+    "NSButton",
+    "NSControl",
+}
+
+
+def _pyobjc_selector(name: str) -> str | None:
+    if name.endswith("__") and keyword.iskeyword(name[:-2]):
+        name = name[:-2]
+    if name.startswith("__") and name.endswith("__"):
+        return None
+    if "_" in name[1:] and not name.endswith("_"):
+        return None
+    value = name.replace("_", ":")
+    if value.startswith(":"):
+        value = "_" + value[1:]
+    return value
+
+
+def _marked_python_method(func: ast.FunctionDef) -> bool:
+    def _is(node: ast.AST) -> bool:
+        if isinstance(node, ast.Name):
+            return node.id == "python_method"
+        if isinstance(node, ast.Attribute):
+            return node.attr == "python_method"
+        if isinstance(node, ast.Call):
+            return _is(node.func)
+        return False
+
+    return any(_is(dec) for dec in func.decorator_list)
+
+
+def _selector_mismatch(func: ast.FunctionDef) -> str | None:
+    """The BadPrototypeError PyObjC would raise, or None when the method is safe."""
+    if _marked_python_method(func):
+        return None
+    selector = _pyobjc_selector(func.name)
+    if selector is None:
+        return None
+    argcount = selector.count(":")
+    args = func.args
+    positional = [*args.posonlyargs, *args.args]
+    defaults = len(args.defaults)
+    kw_required = sum(1 for default in args.kw_defaults if default is None)
+    if kw_required:
+        return f"{func.name} has {kw_required} keyword-only arguments without a default"
+    if args.vararg is not None:
+        return None
+    pos = len(positional)
+    if (pos < argcount + 1) or (pos - defaults > argcount + 1):
+        if defaults:
+            return (
+                f"{selector!r} expects {argcount} arguments, "
+                f"has between {pos - defaults - 1} and {pos - 1} positional arguments"
+            )
+        return (
+            f"{selector!r} expects {argcount} arguments, "
+            f"<function> has {pos - 1} positional arguments"
+        )
+    return None
+
+
+def _objc_class_mismatches(path: Path) -> list[str]:
+    tree = ast.parse(path.read_text(encoding="utf-8"))
+    found = []
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.ClassDef):
+            continue
+        bases = {ast.unparse(base).split(".")[-1] for base in node.bases}
+        if not bases & _OBJC_ROOTS:
+            continue
+        for item in node.body:
+            if not isinstance(item, ast.FunctionDef):
+                continue
+            mismatch = _selector_mismatch(item)
+            if mismatch:
+                found.append(f"{path.name}:{item.lineno} {node.name}.{item.name}: {mismatch}")
+    return found
+
+
+def test_show_selector_matches_the_runtime_failure():
+    """The Mac log is PyObjC rejecting ``_show`` while the class is created."""
+    bare = ast.parse("def _show(self, panel):\n    return panel").body[0]
+    assert _selector_mismatch(bare) == (
+        "'_show' expects 0 arguments, <function> has 1 positional arguments"
+    )
+    marked = ast.parse("@objc.python_method\ndef _show(self, panel):\n    return panel").body[0]
+    assert _selector_mismatch(marked) is None
+    # An internal underscore is not a selector, which is why ``_match_scale``
+    # did not appear in the log. It is still marked, with the other helpers.
+    assert _pyobjc_selector("_match_scale") is None
+    assert _pyobjc_selector("_close_panels") is None
+    assert _pyobjc_selector("_show") == "_show"
+    assert _pyobjc_selector("_handle") == "_handle"
+    assert _pyobjc_selector("_arm") == "_arm"
+
+
+def test_overlay_helpers_are_python_methods():
+    root = Path(__file__).resolve().parents[1] / "src" / "hfagent"
+    mismatches = []
+    for path in sorted(root.rglob("*.py")):
+        mismatches.extend(_objc_class_mismatches(path))
+    assert mismatches == []
+
+    source = (root / "desktop" / "overlay_main.py").read_text(encoding="utf-8")
+    ticker = source.split("class Ticker", 1)[1].split("\n    ticker = ", 1)[0]
+    for name in ("_close_panels", "_show", "_match_scale"):
+        idx = ticker.index(f"def {name}")
+        assert "python_method" in ticker[max(0, idx - 200) : idx]
+    # AppKit still has to call these. Marking them python_method would hide the window.
+    for name in ("isFlipped", "isOpaque", "hitTest_", "drawRect_", "initWithState_", "sync_", "tick_"):
+        assert f"def {name}" in source
 
 
 def test_importing_the_overlay_does_not_open_a_toolkit():
