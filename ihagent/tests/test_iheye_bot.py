@@ -9,6 +9,11 @@ from hfagent.iheye.appearance import STATES
 from hfagent.iheye.bot import (
     BOT_H,
     BOT_W,
+    IDLE_ANIMATIONS,
+    IDLE_GAP,
+    IDLE_NAMES,
+    IDLE_PLAY,
+    IDLE_TIMEOUT,
     SUCCESS_PHASE,
     bot_mood,
     bot_pose,
@@ -16,6 +21,7 @@ from hfagent.iheye.bot import (
     point_in_bot,
     reduce_motion_from_env,
 )
+from hfagent.iheye.tracking import PHASE_PER_SEC
 from hfagent.iheye.overlay_app import overlay_reduce_motion
 from hfagent.iheye.supervisor import EyeSupervisor
 from hfagent.tools import default_registry
@@ -126,6 +132,95 @@ def test_reduced_motion_holds_the_pose():
     assert success.wave == 0.0
     assert success.bob == 0.0
     assert success.smile > 0.8
+
+
+def _idle_at(index: int, frac: float):
+    elapsed = IDLE_TIMEOUT + index * (IDLE_PLAY + IDLE_GAP) + IDLE_PLAY * frac
+    return bot_pose("idle", 0.0, reduce_motion=False, idle_for=elapsed)
+
+
+def test_idle_flourishes_rotate_and_stop_when_activity_resumes():
+    assert IDLE_NAMES == ("sway", "hop", "wave", "spin", "breathe")
+    assert len({name for name, _fn in IDLE_ANIMATIONS}) == 5
+    for _name, fn in IDLE_ANIMATIONS:
+        start = fn(0.0, IDLE_PLAY)
+        end = fn(IDLE_PLAY, IDLE_PLAY)
+        for delta in (start, end):
+            assert abs(delta.bob) < 0.05
+            assert abs(delta.tilt) < 0.05
+            assert abs(delta.wave) < 0.05
+            assert abs(delta.chest) < 0.05
+            assert abs(delta.ring) < 0.05
+        energy = 0.0
+        for frac in (0.12, 0.25, 0.37, 0.62, 0.75):
+            delta = fn(IDLE_PLAY * frac, IDLE_PLAY)
+            energy = max(
+                energy,
+                abs(delta.bob) + abs(delta.tilt) + abs(delta.wave) + abs(delta.chest) + abs(delta.ring),
+            )
+        assert energy > 0.5
+
+    resting = bot_pose("idle", 0.0, idle_for=0.0)
+    assert resting.idle_anim == ""
+    assert bot_pose("idle", 1.0).idle_anim == ""
+    assert bot_pose("idle", (IDLE_TIMEOUT - 0.2) * PHASE_PER_SEC).idle_anim == ""
+
+    sway_a = _idle_at(0, 0.125)
+    sway_b = _idle_at(0, 0.375)
+    assert sway_a.idle_anim == sway_b.idle_anim == "sway"
+    assert sway_a.tilt * sway_b.tilt < 0
+    assert abs(sway_a.tilt) > 3 and abs(sway_b.tilt) > 3
+
+    hop = _idle_at(1, 0.5)
+    assert hop.idle_anim == "hop"
+    assert hop.bob > resting.bob + 6
+
+    wave = _idle_at(2, 0.5)
+    assert wave.idle_anim == "wave"
+    assert wave.wave > 0.6
+
+    spin = _idle_at(3, 0.5)
+    assert spin.idle_anim == "spin"
+    assert spin.tilt > 10
+    assert spin.ring > resting.ring + 0.8
+
+    breathe = _idle_at(4, 0.25)
+    assert breathe.idle_anim == "breathe"
+    assert breathe.chest > resting.chest + 0.25
+    assert breathe.bob < hop.bob - 4
+
+    gap = bot_pose("idle", 0.0, idle_for=IDLE_TIMEOUT + IDLE_PLAY + 0.15)
+    assert gap.idle_anim == ""
+    again = bot_pose(
+        "idle",
+        0.0,
+        idle_for=IDLE_TIMEOUT + 5 * (IDLE_PLAY + IDLE_GAP) + 0.2,
+    )
+    assert again.idle_anim == "sway"
+
+    # The overlay only passes phase. A long idle phase still picks a flourish.
+    from_phase = bot_pose("idle", (IDLE_TIMEOUT + 0.3) * PHASE_PER_SEC)
+    assert from_phase.idle_anim == "sway"
+    settled_done = bot_pose("done", SUCCESS_PHASE + (IDLE_TIMEOUT + 0.3) * PHASE_PER_SEC)
+    assert settled_done.mood == "idle"
+    assert settled_done.idle_anim == "sway"
+    assert bot_pose("done", SUCCESS_PHASE + 1.0).idle_anim == ""
+
+    for pose in (
+        bot_pose("thinking", 0.0, idle_for=99),
+        bot_pose("thinking", 0.0, speaking=True, idle_for=99),
+        bot_pose("thinking", 0.0, working=True, idle_for=99),
+        bot_pose("waiting", 0.0, idle_for=99),
+        bot_pose("done", 1.0, idle_for=99),
+        bot_pose("idle", 0.0, reduce_motion=True, idle_for=99),
+    ):
+        assert pose.idle_anim == ""
+
+    rest_ops = describe_bot(resting)
+    hop_ops = describe_bot(hop)
+    rest_top = max(op["cy"] for op in rest_ops if "cy" in op)
+    hop_top = max(op["cy"] for op in hop_ops if "cy" in op)
+    assert hop_top > rest_top + 4
 
 
 def test_clicks_outside_the_robot_fall_through():

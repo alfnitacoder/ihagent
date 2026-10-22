@@ -28,7 +28,7 @@ from .look import (
     model_can_see,
 )
 from .robot import normalize_skin, skin_from_env
-from .panels import clean_chat_text, summarize_answer, trim_reply
+from .panels import clean_chat_text, scrollable_body
 from .protocol import connect_socket, decode, encode
 
 INSTALL_HINT = "pip install 'hfagent[iheye]'"
@@ -334,7 +334,7 @@ class EyeSupervisor:
         raw = text if isinstance(text, str) else str(text or "")
         if len(raw) > 8000:
             raw = raw[-8000:]
-        message = {"reply": trim_reply(raw), "final": bool(final)}
+        message = {"reply": scrollable_body(raw, tail=True), "final": bool(final)}
         with self._lock:
             now = time.monotonic()
             if not final and now - self._reply_at < 0.08:
@@ -346,7 +346,7 @@ class EyeSupervisor:
     def note_summary(self, text: str) -> None:
         if not self.running or not self.summary_enabled:
             return
-        body = summarize_answer(text)
+        body = scrollable_body(text, tail=False)
         if not body:
             return
         with self._lock:

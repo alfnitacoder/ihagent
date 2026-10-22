@@ -716,6 +716,97 @@ def test_reply_summary_and_card_policy():
     assert should_restore_front(7, 7, 7) is False
 
 
+def test_long_panel_text_scrolls_instead_of_a_fixed_slice():
+    """A frozen offset is the old bug: the last lines never reach the card."""
+    from hfagent.iheye.panels import (
+        SCROLL_HOLD,
+        SUMMARY_FOOTER,
+        SUMMARY_SECONDS,
+        page_metrics,
+        page_text,
+        scroll_continues,
+        scroll_cycle_seconds,
+        scrollable_body,
+        step_text_scroll,
+        summary_hold_for,
+        visible_lines,
+        wrap_panel_lines,
+    )
+
+    lines = [f"item {i:02d} is still unread" for i in range(12)]
+    text = "\n".join(lines)
+    wrapped = wrap_panel_lines(text, wrap=40)
+    assert wrapped == lines
+    assert all(len(line) <= 40 for line in wrap_panel_lines("x" * 100, wrap=40))
+
+    width, height = 256.0, 92.0
+    body, _footer, slots = page_metrics(text, width=width, height=height)
+    assert slots < len(body)
+    frozen = visible_lines(body, 0, slots)
+    assert frozen[0] == body[0]
+    assert body[-1] not in frozen
+
+    seen = set()
+    offset, hold = 0.0, 0.0
+    opened, _hold = step_text_scroll(0.0, 0.0, len(body), slots, SCROLL_HOLD - 0.05)
+    assert opened == 0.0
+    for _ in range(500):
+        seen.update(visible_lines(body, offset, slots))
+        offset, hold = step_text_scroll(offset, hold, len(body), slots, 0.1)
+    assert seen == set(body)
+
+    parked, parked_hold = step_text_scroll(2.0, 0.4, len(body), slots, 5.0, paused=True)
+    assert (parked, parked_hold) == (2.0, 0.4)
+    fitting, fitting_hold = step_text_scroll(3.0, 1.0, 2, slots, 5.0)
+    assert (fitting, fitting_hold) == (0.0, 0.0)
+
+    span = len(body) - slots
+    restarted, _hold = step_text_scroll(float(span), SCROLL_HOLD, len(body), slots, 0.05)
+    assert restarted == 0.0
+
+    shown = page_text(text, width=width, height=height, offset=0, footer=SUMMARY_FOOTER)
+    assert shown.startswith(lines[0])
+    assert lines[-1] not in shown.splitlines()
+    assert shown.endswith(SUMMARY_FOOTER)
+    _body, _footer_lines, with_footer = page_metrics(
+        text, width=width, height=height, footer=SUMMARY_FOOTER
+    )
+    end = max(0, len(lines) - with_footer)
+    later = page_text(text, width=width, height=height, offset=end, footer=SUMMARY_FOOTER)
+    assert lines[-1] in later.splitlines()
+    assert later.endswith(SUMMARY_FOOTER)
+
+    short = "Finished."
+    assert summary_hold_for(short) == SUMMARY_SECONDS
+    assert summary_hold_for(text) > SUMMARY_SECONDS
+    assert summary_hold_for(text) >= scroll_cycle_seconds(len(body), slots)
+
+    fresh = scrollable_body("one\ntwo\nthree\nfour\nfive")
+    assert "five" in fresh.splitlines()
+    long = scrollable_body("\n".join(f"row {i}" for i in range(40)), tail=False)
+    assert long.splitlines()[-1].endswith("…")
+    assert "row 0" in long
+    newest = scrollable_body("\n".join(f"row {i}" for i in range(40)), tail=True)
+    assert newest.startswith("…")
+    assert "row 39" in newest
+    assert "row 0\n" not in newest
+
+    same = ("summary", "alpha", "Finished", ("run",))
+    grown = ("summary", "alpha\nbeta", "Finished", ("run",))
+    assert scroll_continues(same, grown)
+    assert scroll_continues(same, ("chat", "alpha", "Finished", ("run",))) is False
+    assert scroll_continues(same, ("summary", "beta", "Finished", ("run",))) is False
+    assert scroll_continues(None, same) is False
+
+    from pathlib import Path
+
+    overlay = Path(__file__).resolve().parents[1] / "src" / "hfagent" / "iheye" / "overlay_app.py"
+    source = overlay.read_text(encoding="utf-8")
+    assert "step_text_scroll" in source
+    assert "_scroll_offset" in source
+    assert "summary_hold_for" in source
+
+
 def test_gaze_follows_pointer_and_keys_are_not_read():
     from pathlib import Path
 
@@ -869,9 +960,10 @@ def test_supervisor_delivers_chat_and_approval(monkeypatch, tmp_path):
         replies = [msg["reply"] for msg in got[before:] if "reply" in msg]
         summaries = [msg["summary"] for msg in got[before:] if "summary" in msg]
         approvals = [msg["approval"] for msg in got[before:] if "approval" in msg]
-        assert replies and "eta" in replies[-1]
+        assert replies and "alpha" in replies[-1] and "eta" in replies[-1]
         assert summaries and summaries[-1].startswith("Finished")
-        assert len(summaries[-1].splitlines()) <= 4
+        assert "Trailing" in summaries[-1]
+        assert len(summaries[-1].splitlines()) >= 5
         assert approvals[-1]["tool"] == "run_command"
         quiet = len(got)
         control.summary_enabled = False

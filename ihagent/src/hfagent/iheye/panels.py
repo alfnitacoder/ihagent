@@ -6,10 +6,20 @@ Nothing here imports AppKit.
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass
 
 HOVER_HIDE_DELAY = 0.35
 SUMMARY_SECONDS = 8.0
+SUMMARY_FOOTER = "Click to open ihagent"
+
+# The card used to keep a fixed head (summary) or tail (reply) and paint that
+# one slice. Lines past the slice were discarded, and nothing moved the window,
+# so a long status sat clipped. These drive a window that advances over time.
+SCROLL_LINES_PER_SEC = 0.75
+SCROLL_HOLD = 1.35
+SCROLL_MAX_LINES = 24
+_PANEL_FONT = 12.0
 
 DROP_W = 280.0
 
@@ -112,6 +122,214 @@ def summarize_answer(text: object) -> str:
     return clip_text(text, max_lines=4, max_chars=220, tail=False)
 
 
+def chars_that_fit(width: float, font_size: float = _PANEL_FONT) -> int:
+    """How many characters a line can hold before the card clips the rest."""
+    char = max(1.0, float(font_size) * 0.62)
+    return max(8, int(max(0.0, float(width)) / char))
+
+
+def lines_that_fit(height: float, line_height: float = 20.0) -> int:
+    """Whole lines inside a text rect, leaving padding so the last one is not cut."""
+    usable = max(0.0, float(height) - 2.0)
+    return max(1, int(usable / max(1.0, float(line_height))))
+
+
+def wrap_panel_lines(text: object, *, wrap: int = 36, limit: int = 400) -> list[str]:
+    """Wrap to the card width and keep every line, up to a safety cap.
+
+    ``clip_text`` stops at a fixed head or tail. This does not: the caller
+    chooses which slice to show, and can move that slice later.
+    """
+    raw = text if isinstance(text, str) else str(text or "")
+    clean = raw.replace("\r\n", "\n").replace("\r", "\n").strip()
+    if not clean:
+        return []
+    if len(clean) > 4000:
+        clean = clean[:4000]
+    source: list[str] = []
+    for line in clean.split("\n"):
+        line = _plain_line(line)
+        if not line:
+            if source and source[-1] != "":
+                source.append("")
+            continue
+        source.append(line)
+    wrapped: list[str] = []
+    wrap = max(8, int(wrap))
+    limit = max(1, int(limit))
+    for line in source:
+        if len(wrapped) >= limit:
+            break
+        if line == "":
+            if wrapped and wrapped[-1] != "":
+                wrapped.append("")
+            continue
+        while len(line) > wrap:
+            if len(wrapped) >= limit:
+                line = ""
+                break
+            cut = line.rfind(" ", 0, wrap + 1)
+            if cut < 8:
+                cut = wrap
+            wrapped.append(line[:cut].strip())
+            line = line[cut:].strip()
+        if line and len(wrapped) < limit:
+            wrapped.append(line)
+    while wrapped and wrapped[-1] == "":
+        wrapped.pop()
+    return wrapped
+
+
+def scrollable_body(
+    text: object,
+    *,
+    tail: bool = False,
+    max_lines: int = SCROLL_MAX_LINES,
+    wrap: int | None = None,
+) -> str:
+    """Card payload. Markup stripped, long enough for the panel to scroll.
+
+    A summary keeps the start of the answer. A live reply keeps the newest
+    lines. Either way the overlay receives more than one frozen screen.
+    """
+    if wrap is None:
+        wrap = chars_that_fit(DROP_W - 24.0)
+    lines = wrap_panel_lines(text, wrap=wrap, limit=max(max_lines + 8, 80))
+    if not lines:
+        return ""
+    if len(lines) > max_lines:
+        if tail:
+            lines = lines[-max_lines:]
+            if lines and not lines[0].startswith("…"):
+                lines[0] = "… " + lines[0].lstrip()
+        else:
+            lines = lines[:max_lines]
+            if lines and not lines[-1].endswith("…"):
+                lines[-1] = lines[-1].rstrip() + "…"
+    return "\n".join(lines).strip()
+
+
+def visible_lines(lines: list[str], offset: float, visible: int) -> list[str]:
+    """The lines on screen when the window starts at ``offset``.
+
+    Offset 0 is the old fixed slice: the last lines never appear. Callers
+    advance ``offset`` so later lines scroll into view.
+    """
+    if not lines:
+        return []
+    visible = max(1, int(visible))
+    if len(lines) <= visible:
+        return list(lines)
+    start = int(math.floor(max(0.0, float(offset))))
+    start = min(start, len(lines) - visible)
+    return list(lines[start : start + visible])
+
+
+def step_text_scroll(
+    offset: float,
+    hold: float,
+    line_count: int,
+    visible: int,
+    dt: float,
+    *,
+    paused: bool = False,
+    lines_per_sec: float = SCROLL_LINES_PER_SEC,
+    hold_seconds: float = SCROLL_HOLD,
+) -> tuple[float, float]:
+    """Advance the window. Returns ``(offset, hold)``.
+
+    The window rests at the first line, scrolls, rests on the last line,
+    then starts again. ``paused`` (the pointer is on the card) freezes it
+    so the line the reader is on does not move. Text that already fits
+    stays at offset 0.
+    """
+    span = max(0, int(line_count) - max(1, int(visible)))
+    if span <= 0 or dt < 0 or lines_per_sec <= 0:
+        return 0.0, 0.0
+    offset = min(max(0.0, float(offset)), float(span))
+    hold = max(0.0, float(hold))
+    if paused:
+        return offset, hold
+    dt = float(dt)
+    at_start = offset <= 0.001
+    at_end = offset >= span - 0.001
+    if at_end and hold >= hold_seconds:
+        return 0.0, 0.0
+    if (at_start or at_end) and hold < hold_seconds:
+        hold += dt
+        if hold < hold_seconds:
+            return (0.0 if at_start else float(span)), hold
+        if at_end:
+            return 0.0, 0.0
+        extra = hold - hold_seconds
+        moved = min(span, max(extra * lines_per_sec, 0.02))
+        return moved, 0.0
+    moved = min(span, offset + lines_per_sec * dt)
+    if moved >= span:
+        return float(span), 0.0
+    return moved, 0.0
+
+
+def scroll_continues(previous: object, identity: tuple) -> bool:
+    """True when the card only grew, so the scroll window should stay put.
+
+    A streaming reply is appended every tick. Resetting the offset on each
+    append would pin the card to the first lines for the whole reply.
+    """
+    if not isinstance(previous, tuple) or len(previous) != len(identity) or len(identity) < 4:
+        return False
+    if previous[0] != identity[0] or previous[3] != identity[3]:
+        return False
+    return str(identity[1] or "").startswith(str(previous[1] or "")) and str(
+        identity[2] or ""
+    ).startswith(str(previous[2] or ""))
+
+
+def scroll_cycle_seconds(
+    line_count: int,
+    visible: int,
+    *,
+    lines_per_sec: float = SCROLL_LINES_PER_SEC,
+    hold_seconds: float = SCROLL_HOLD,
+) -> float:
+    """Seconds for one pass from the first line to the last, including both rests."""
+    span = max(0, int(line_count) - max(1, int(visible)))
+    if span <= 0 or lines_per_sec <= 0:
+        return 0.0
+    return hold_seconds + (span / lines_per_sec) + hold_seconds
+
+
+def page_metrics(
+    text: object,
+    *,
+    width: float,
+    height: float,
+    footer: str = "",
+) -> tuple[list[str], list[str], int]:
+    """Wrapped body, footer lines, and how many body lines the rect can show."""
+    wrap = chars_that_fit(width)
+    lines = wrap_panel_lines(text, wrap=wrap)
+    footer_lines = wrap_panel_lines(footer, wrap=wrap) if str(footer or "").strip() else []
+    slots = lines_that_fit(height)
+    if footer_lines:
+        slots = max(1, slots - len(footer_lines))
+    return lines, footer_lines, slots
+
+
+def page_text(
+    text: object,
+    *,
+    width: float,
+    height: float,
+    offset: float = 0.0,
+    footer: str = "",
+) -> str:
+    """The string the card paints at this scroll offset. The footer stays put."""
+    lines, footer_lines, slots = page_metrics(text, width=width, height=height, footer=footer)
+    shown = visible_lines(lines, offset, slots)
+    return "\n".join([*shown, *footer_lines]).strip()
+
+
 def approval_body(tool: object, preview: object) -> str:
     name = str(tool or "").strip() or "action"
     body = clip_text(preview, max_lines=3, max_chars=160, tail=False)
@@ -174,6 +392,19 @@ def layout_drop(mode: str, width: float, height: float) -> dict[str, Rect]:
             **_chat_controls(width, height, field_y=42, reply_y=90),
         }
     return _chat_controls(width, height, field_y=10, reply_y=58)
+
+
+def summary_hold_for(text: object) -> float:
+    """Keep a long completion card up long enough to scroll through once."""
+    width, height = drop_size("summary")
+    rect = layout_drop("summary", width, height).get("reply")
+    if rect is None:
+        return SUMMARY_SECONDS
+    lines, _footer, slots = page_metrics(
+        text, width=rect.w, height=rect.h, footer=SUMMARY_FOOTER
+    )
+    cycle = scroll_cycle_seconds(len(lines), slots)
+    return max(SUMMARY_SECONDS, cycle + 0.5)
 
 
 def _chat_controls(
