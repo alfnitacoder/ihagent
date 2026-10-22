@@ -56,6 +56,11 @@ HELP = """\
 /url <base_url>   test a host (GET /v1/models) and switch to it
 /primary          switch back from the fallback host
 /config           show effective settings and where each came from
+/audit [path]     read-only repo health check (also: ihagent --audit)
+/test [scaffold] [path]  detect and run tests, or a smoke check
+/output           show the last full command or browser output
+/cache [clear]    show or forget the per-project session cache
+/security [apply] insecure-pattern checklist; apply asks before each change
 /model <name|#| > switch model (name, unique part, or list number)
 /model_api=<key>  paste an Ollama Cloud or Hugging Face key (saved, not shown)
 /sessions [all]   list saved sessions (title, time, size). 'all' includes archived
@@ -287,6 +292,47 @@ def dispatch_slash(agent: Agent, ui: AgentUI, line: str) -> SlashResult:
 
     if command == "/config":
         ui.on_system(format_config_report(agent.config))
+        return "handled"
+
+    if command == "/audit":
+        from .assist.audit import audit
+
+        report, _warnings = audit(arg.strip() or ".")
+        ui.on_system(report)
+        return "handled"
+
+    if command == "/test":
+        from .assist.testing import parse_test_command, run_project_tests
+
+        path, scaffold = parse_test_command(arg)
+        ui.on_system(run_project_tests(path, scaffold=scaffold))
+        return "handled"
+
+    if command == "/output":
+        from .assist.summary import last_full_output
+
+        ui.on_system(last_full_output(agent))
+        return "handled"
+
+    if command == "/cache":
+        from .assist.cache import clear, describe
+
+        if arg.strip() == "clear":
+            ui.on_system(clear())
+        else:
+            ui.on_system(describe())
+        return "handled"
+
+    if command == "/security":
+        from .assist.security import apply_with_approval, format_findings, scan_project
+
+        target = "."
+        if arg.strip() == "apply":
+            ui.on_system(apply_with_approval(target, ui.approve))
+        else:
+            if arg.strip():
+                target = arg.strip()
+            ui.on_system(format_findings(scan_project(target)))
         return "handled"
 
     if command == "/url":

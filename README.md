@@ -24,6 +24,7 @@ The screenshot is a live session on Ollama Cloud (`host` label `cloud`, device `
 - [Backends](#backends)
 - [Context, reasoning, and errors](#context-reasoning-and-errors)
 - [Tools](#tools)
+- [Assists](#assists)
 - [Browser](#browser)
 - [MCP servers](#mcp-servers)
 - [iheye](#iheye)
@@ -302,6 +303,7 @@ While a turn is running you can still type. A note is picked up on the next step
 | `-y`, `--yolo` | Same as `--approval auto`. |
 | `--tui` / `--console` | Force the TUI, or the line REPL. |
 | `--show-config` | Print resolved settings and exit. Secrets are masked. |
+| `--audit [PATH]` | Read-only repo health check, then exit. No path means the current directory. Exit code 1 when the report has warnings. |
 | `--version` | Print `0.4.0` and exit. |
 
 ## Configuration
@@ -337,6 +339,17 @@ The first source that sets a value wins. `ihagent --show-config` and `/config` p
 | `HFAGENT_FALLBACK_MODEL` | primary model | Model id on the fallback host. |
 | `HFAGENT_FALLBACK_API_KEY` | key for that host | Optional key used only for the fallback. |
 | `HFAGENT_MEMORY_PATH` | `~/.hfagent/memory` | Directory that holds `memory.md`. |
+| `HFAGENT_ASSISTS` | on | `0` / `off` disables every assist below. |
+| `HFAGENT_TOOL_GUARD` | on | `0` / `off` allows a failed tool call to be repeated, and skips the directory listing on path errors. |
+| `HFAGENT_SUMMARIZE_OUTPUT` | on | `0` / `off` shows full `run_command`, `ssh_run`, and `browser_read` output in the UI. |
+| `HFAGENT_SUMMARY_MIN_CHARS` | `1200` | Length or 40 lines before that output is summarized. `/output` still prints the full text. |
+| `HFAGENT_AUTO_INSTALL` | on | `0` / `off` skips the background install after a manifest write. |
+| `HFAGENT_SESSION_CACHE` | on | `0` / `off` skips the per-project cache. `HFAGENT_CACHE_DIR` moves it (default `~/.hfagent/cache`). |
+| `HFAGENT_STYLE_AUDIT` | on | `0` / `off` skips the font, background, and transition notes after a UI edit. |
+| `HFAGENT_FILE_HEADERS` | on | `0` / `off` skips the header comment and docs snippet on new source files. |
+| `HFAGENT_SECURITY_CHECK` | on | `0` / `off` skips the insecure-pattern checklist. |
+| `HFAGENT_HOST_HINTS` | on | `0` / `off` skips the `ssh_run` template when a remembered host is named. |
+| `HFAGENT_AUDIT_NETWORK` | off | `1` / `on` lets `--audit` run `npm outdated` (8 second cap). |
 | `HFAGENT_BROWSER_HEADLESS` | headed | `1` / `true` / `yes` / `on` hides the window. |
 | `HFAGENT_BROWSER_PROFILE` | `~/.hfagent/chrome-profile` | User-data dir. The default Chrome profile is refused. |
 | `HFAGENT_BROWSER_DOWNLOAD_DIR` | `~/Downloads/ihagent` | Downloads and screenshots. |
@@ -456,6 +469,7 @@ Built-in tools are registered in `hfagent.tools.default_registry`. MCP tools are
 | `edit_file` | Replace exact text | y/N, with a diff |
 | `run_command` | Shell command on this machine | y/N |
 | `ssh_run` | One command on a host from `~/.ssh/config` | y/N |
+| `run_tests` | Detect and run tests, or a smoke check | y/N |
 | `remember` | Append one fact to long-term memory | — |
 | `web_search` | DuckDuckGo search in the IHAgent Chrome | — |
 | `browser_open` | Open a URL (optional new tab) | y/N for an executable file |
@@ -478,6 +492,50 @@ Built-in tools are registered in `hfagent.tools.default_registry`. MCP tools are
 `ssh_run` is one non-interactive command per call (`BatchMode=yes`, `ConnectTimeout=10`, ControlMaster multiplexing). `background: true` on `ssh_run` or `run_command` starts the command under `nohup` and returns a pid plus a log at `/tmp/hfagent-task-HHMMSS.log`. An SSH background log ends with `BG_EXIT` and `BG_DONE`. A local background command is checked with `ps -p`.
 
 A tool run marks iheye as working. On the bot skin that lights the chest and speeds the ring. The protocol state list is still `idle`, `thinking`, `waiting`, and `done`. `working` and `failed` are extra flags for the bot.
+
+## Assists
+
+These are on unless the setting in the table above is `0`, `off`, `false`, or `no`. `HFAGENT_ASSISTS=0` turns the set off. They exist so a smaller model (for example `gpt-oss:120b` through Ollama) does not repeat a failed call, bury you in a log, or forget the layout of the repo.
+
+### Failed tool calls
+
+A tool result that starts with `Error:` is a failure. For `read_file`, `list_dir`, and `edit_file`, the result adds a directory listing of the nearest existing folder and the closest file names. The same call with the same arguments is not run a second time. The observation says `BLOCKED` and repeats the hint to list the real tree. After two identical failures the loop nudges the model, and after five it rolls the turn back.
+
+### Summaries
+
+`run_command`, `ssh_run`, and `browser_read` output longer than `HFAGENT_SUMMARY_MIN_CHARS` (default 1200) or 40 lines is summarized in the UI: exit code, error lines, and a few key lines. The model still receives the tool result, truncated at `max_tool_result_chars` as before. `/output` prints the last full result.
+
+### Dependency installs
+
+After an approved `write_file` or `edit_file` of `package.json`, `requirements.txt`, `requirements-*.txt`, `pyproject.toml`, or `Pipfile`, the matching install starts in the background: `pnpm install` when `pnpm-lock.yaml` is present, otherwise `yarn install` when `yarn.lock` is present, otherwise `npm install`; `python -m pip install -r` for requirements; `python -m pip install -e .` for `pyproject.toml`. The tool result says the install started. When it finishes, the exit status and the tail of the output are shown. A second install of the same command in the same directory is not started while the first is still running. The write was already approved, so the install does not ask again. Set `HFAGENT_AUTO_INSTALL=0` to skip it.
+
+### Tests
+
+`run_tests` and `/test` look for vitest, jest, mocha, an `npm test` script that is not the npm placeholder, pytest (when the tree has Python tests), and `go test`. The first match runs. If nothing matches, the smoke check is `python -m py_compile` on up to 20 project files, `npm run build` when that script exists, and `curl` of `127.0.0.1` on port 3000, 5173, 8080, or 8000 only when something is already listening. It does not start a server.
+
+`/test scaffold` or `run_tests` with `scaffold=true` writes `tests/test_smoke.py` or `tests/smoke.test.mjs` when that file is absent, and leaves an existing file alone.
+
+### Session cache
+
+Recent `list_dir`, `read_file`, and `run_command` / `ssh_run` results are stored per project under `~/.hfagent/cache` (override with `HFAGENT_CACHE_DIR`). The project is the nearest directory with `package.json`, `pyproject.toml`, `requirements.txt`, `go.mod`, `Cargo.toml`, or `.git`. A later `list_dir` or `read_file` of an unchanged path returns the cached text and says `session cache: file unchanged`. Commands are remembered but not replayed. A write drops listings of that file and its parent, and drops remembered command output. `.env` files and key material are not stored. The system prompt includes a short snapshot (root layout and the first lines of key manifests) when the cache has one. `/cache` prints it. `/cache clear` deletes it.
+
+### Audit
+
+`ihagent --audit` and `/audit` read the tree and print a short report. They check for a README, a license file or license field, a test script or `tests/` directory, a lint script or linter config, CI config (`.github/workflows`, `.gitlab-ci.yml`, `Jenkinsfile`, and the other usual names), `.gitignore`, unpinned requirements, a missing JS lockfile, and a quick security scan. `npm outdated` runs only when `HFAGENT_AUDIT_NETWORK=1`. Nothing is installed or modified. The process exits 1 when the report contains warnings.
+
+### Remembered hosts
+
+If persistent memory mentions a host such as `kali219` (a name with a digit, a backticked alias, or “NAME is … host”), and the user message names that host, the turn shows an `ssh_run` template. A `run:` clause or a backticked command is copied into the template. Otherwise the command is `<command>`. The model is told to use `ssh_run` rather than a local `run_command`.
+
+### Style and new-file headers
+
+After a write or edit of HTML, CSS, SCSS, Vue, JSX, TSX, or UI-looking JavaScript, a short note lists what is missing among a font import, a gradient or image background, and a transition. The file is not rewritten to match. Set `HFAGENT_STYLE_AUDIT=0` to skip the note.
+
+A new source file that does not already start with a comment gets a one-line header and a short docs snippet (a Python docstring, a block comment, or an HTML comment). The second write of an existing path does not add another header. Set `HFAGENT_FILE_HEADERS=0` to leave new files exactly as the model sent them.
+
+### Security checklist
+
+A quick scan looks for default passwords (`admin`, `password`, `123456`, and similar), hardcoded API keys and private keys, `DEBUG = True`, and a POST form with no CSRF token. Findings are redacted. They are attached to the tool result when the edited file contains one, and `/security` prints the project checklist. `/security apply` asks before each change. Debug flags can be turned off. Python and JavaScript literals can be moved to `os.environ["APP_SECRET"]` or `process.env.APP_SECRET`. CSRF and private keys are described and not edited. A declined prompt skips that item.
 
 ## Browser
 
@@ -917,6 +975,11 @@ A dedicated Hugging Face GPU endpoint is a different host. `scripts/setup-huggin
 | `/url <base_url>` | `GET /v1/models`, then switch and save. |
 | `/primary` | Probe the original host and switch back, unless that probe is a connection failure. |
 | `/config` | Effective settings and the source of each. |
+| `/audit [path]` | Read-only repo health check. Same report as `ihagent --audit`. |
+| `/test [scaffold] [path]` | Detect and run tests, or the smoke check. `scaffold` writes a minimal smoke test if it is missing. |
+| `/output` | Print the last full `run_command`, `ssh_run`, or `browser_read` result. |
+| `/cache [clear]` | Show the project session cache, or delete it. |
+| `/security [apply]` | Insecure-pattern checklist. `apply` asks before each mitigation. |
 | `/browser [close]` | Chrome status, or close the window. |
 | `/mcp` | List MCP servers, status, and tool counts. Subcommands: `add`, `remove`, `login`, `tools`, `reload`, `enable`, `disable`. |
 | `/iheye [on\|off]` | macOS floating bubble. `track on\|off`, `summary on\|off`, and `look on\|off` toggle gaze, the completion card, and one-shot capture. |

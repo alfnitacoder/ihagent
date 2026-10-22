@@ -33,6 +33,7 @@ from .mouse import (
 )
 from .shell import RunCommand
 from .ssh import SshRun
+from .tests_tool import RunTests
 
 __all__ = [
     "Tool",
@@ -44,6 +45,7 @@ __all__ = [
     "Grep",
     "RunCommand",
     "SshRun",
+    "RunTests",
     "Remember",
     "WebSearch",
     "BrowserOpen",
@@ -76,7 +78,7 @@ def default_registry() -> ToolRegistry:
     registry = ToolRegistry()
     for tool in (
         ListDir(), ReadFile(), Grep(), WriteFile(), EditFile(), RunCommand(),
-        SshRun(), Remember(),
+        SshRun(), RunTests(), Remember(),
         WebSearch(), BrowserOpen(), BrowserTabs(), BrowserSwitchTab(),
         BrowserNewTab(), BrowserCloseTab(), BrowserRead(), BrowserClick(),
         BrowserType(), BrowserSelect(), BrowserPress(), BrowserScroll(),

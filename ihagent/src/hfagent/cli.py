@@ -73,6 +73,14 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--version", action="store_true", help="print version and exit")
     parser.add_argument(
+        "--audit",
+        nargs="?",
+        const=".",
+        default=None,
+        metavar="PATH",
+        help="read-only repo health check (README, tests, lint, CI, license, deps), then exit",
+    )
+    parser.add_argument(
         "--show-config",
         action="store_true",
         help="print effective settings and where each one came from, then exit",
@@ -341,6 +349,14 @@ def _main(argv: list[str] | None = None) -> None:
         from . import __version__
 
         print(__version__)
+        return
+    if getattr(args, "audit", None) is not None:
+        from .assist.audit import audit
+
+        report, warnings = audit(args.audit)
+        print(report)
+        if warnings:
+            sys.exit(1)
         return
     if args.show_config:
         config = Config.load(

@@ -566,7 +566,7 @@ class Agent:
             max_retries=2,
         )
         self.messages: list[dict[str, Any]] = [
-            {"role": "system", "content": system_prompt(config.base_url)}
+            {"role": "system", "content": self._system_content()}
         ]
         self._native_tools = True
         self._inbox: queue.Queue[str] = queue.Queue()
@@ -606,7 +606,7 @@ class Agent:
         if self.messages and self.messages[0].get("role") == "system":
             self.messages[0] = {
                 "role": "system",
-                "content": system_prompt(base_url),
+                "content": self._system_content(),
             }
         self.device = "…"
 
@@ -683,9 +683,49 @@ class Agent:
             if m.get("role") == "system"
         ] + [m for m in history if m.get("role") != "system"]
 
+    def _system_content(self) -> str:
+        """System prompt plus a short project snapshot when the cache has one."""
+        text = system_prompt(self.config.base_url)
+        try:
+            from .assist.cache import snapshot_block
+
+            extra = snapshot_block()
+        except Exception:
+            extra = ""
+        if extra:
+            return text + "\n\n" + extra
+        return text
+
+    def _installer(self):
+        sched = getattr(self, "_installs", None)
+        if sched is None:
+            from .assist.deps import InstallScheduler
+
+            sched = InstallScheduler(notify=self.ui.on_system)
+            self._installs = sched
+        return sched
+
+    def _schedule_install(self, path: str) -> str:
+        from .assist.deps import plan_install
+        from .assist.settings import auto_install
+
+        if not auto_install() or plan_install(path) is None:
+            return ""
+        from .assist.deps import maybe_schedule
+
+        return maybe_schedule(path, self._installer())
+
+    def _drain_install_notes(self) -> None:
+        """Move finished install results into the conversation for the model."""
+        sched = getattr(self, "_installs", None)
+        if sched is None:
+            return
+        for note in sched.drain():
+            self.messages.append({"role": "user", "content": note})
+
     def reset(self) -> None:
         self.messages = [
-            {"role": "system", "content": system_prompt(self.config.base_url)}
+            {"role": "system", "content": self._system_content()}
         ]
         self.session_name = None
 
@@ -776,6 +816,16 @@ class Agent:
                     + " - do it yourself now with a tool call (run_command "
                     "or ssh_run). No text answer, no invented output."
                 )
+        if isinstance(user_input, str):
+            try:
+                from .assist.hooks import prepare_user_text
+
+                user_input, hint = prepare_user_text(user_input)
+            except Exception:
+                hint = None
+            if hint:
+                self.ui.on_system(hint)
+        self._drain_install_notes()
         self.messages.append({"role": "user", "content": user_input})
         nudges = {"fabrication": 0, "proposal": 0, "empty": 0, "repeat_fail": 0}
         tool_used = False
@@ -1098,6 +1148,8 @@ class Agent:
             self._patch_interrupted()
             self._note_eye_error("interrupted by user")
             return ""
+        finally:
+            self._drain_install_notes()
         self._note_eye_error("reached max steps without a final answer")
         return ""
 
@@ -1292,6 +1344,7 @@ class Agent:
 
     def _step(self) -> dict[str, Any]:
         """One model turn: stream text + tool calls, then run pending tools."""
+        self._drain_install_notes()
         content_parts: list[str] = []
         thought_parts: list[str] = []
         tool_calls: dict[int, dict[str, str]] = {}
@@ -1465,37 +1518,67 @@ class Agent:
             self.ui.on_observation(name, result)
             return result
 
-        if name == "ssh_run" and isinstance(args.get("host"), str):
-            self.ui.on_status(
-                f"remote task on {args['host']}: executing, waiting for "
-                "completion..."
-            )
-        self._note_eye_working(True)
-        try:
-            result = tool.run(**args)
-        except Exception as exc:  # surfaced to the model as an Observation
-            result = f"Error: {type(exc).__name__}: {exc}"
-        result = self._truncate(result)
         sig = (name, json.dumps(args, sort_keys=True, default=str))
         prev = getattr(self, "_repeat_fail", {"sig": None, "n": 0})
+        from .assist.hooks import (
+            blocked_repeat,
+            enrich_tool_error,
+            post_tool,
+            present_to_user,
+            recall_cached,
+            with_file_header,
+        )
+
+        blocked = blocked_repeat(prev, sig, REPEAT_FAIL_HINT)
+        if blocked is not None:
+            result = blocked
+        else:
+            run_args, header_note = with_file_header(name, args)
+            cached = recall_cached(name, args)
+            if cached is not None:
+                result = cached
+            else:
+                if name == "ssh_run" and isinstance(args.get("host"), str):
+                    self.ui.on_status(
+                        f"remote task on {args['host']}: executing, waiting for "
+                        "completion..."
+                    )
+                self._note_eye_working(True)
+                try:
+                    result = tool.run(**run_args)
+                except Exception as exc:  # surfaced to the model as an Observation
+                    result = f"Error: {type(exc).__name__}: {exc}"
+                result = enrich_tool_error(name, run_args, result)
+                result = post_tool(
+                    name,
+                    run_args,
+                    result,
+                    header_note=header_note,
+                    schedule=self._schedule_install,
+                )
+        result = self._truncate(result)
         if result.startswith("Error:"):
             if prev.get("sig") == sig:
                 prev["n"] = int(prev.get("n") or 0) + 1
             else:
                 prev = {"sig": sig, "n": 1}
+            prev["failed"] = True
+            prev["result"] = result
             self._repeat_fail = prev
             if prev["n"] >= 2 and REPEAT_FAIL_HINT not in result:
                 result = result + REPEAT_FAIL_HINT
+                prev["result"] = result
         elif name == "run_command" and prev.get("sig") == sig and prev.get(
             "out"
         ) == result:
             prev["n"] = int(prev.get("n") or 0) + 1
+            prev["failed"] = False
             self._repeat_fail = prev
             if prev["n"] >= 2 and "identical run_command" not in result:
                 result = result + "\nHINT: " + REPEAT_SAME_CMD_NUDGE
         else:
-            self._repeat_fail = {"sig": sig, "n": 1, "out": result}
-        self.ui.on_observation(name, result)
+            self._repeat_fail = {"sig": sig, "n": 1, "out": result, "failed": False}
+        self.ui.on_observation(name, present_to_user(self, name, result))
         return result
 
     def _needs_approval(self, tool, args: dict) -> bool:

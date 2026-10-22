@@ -11,7 +11,7 @@ def test_specs_are_valid_function_specs():
     names = {spec["function"]["name"] for spec in specs}
     assert names == {
         "list_dir", "read_file", "write_file", "edit_file", "grep",
-        "run_command", "ssh_run", "remember",
+        "run_command", "ssh_run", "run_tests", "remember",
         "web_search", "browser_open", "browser_tabs", "browser_switch_tab",
         "browser_new_tab", "browser_close_tab", "browser_read", "browser_click",
         "browser_type", "browser_select", "browser_press", "browser_scroll",
