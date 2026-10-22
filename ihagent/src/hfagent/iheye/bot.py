@@ -9,15 +9,21 @@ here builds a CALayer tree.
 ``bot_mood`` never selects it. ``speaking`` is a streaming reply while the
 agent state is still ``thinking``. ``working`` and ``failed`` are side
 flags, not protocol states.
+
+After the robot has been idle for a few seconds it plays a short flourish
+from ``IDLE_ANIMATIONS`` (sway, hop, wave, spin, breathe), then the next.
+Any real activity drops the flourish on the next pose.
 """
 
 from __future__ import annotations
 
 import math
 import os
+from collections.abc import Callable
 from dataclasses import dataclass
 
 from .appearance import normalize_state
+from .tracking import PHASE_PER_SEC
 
 BOT_W = 168.0
 BOT_H = 220.0
@@ -103,6 +109,8 @@ class BotPose:
     hot_rgb: tuple[float, float, float]
     glow: float
     reduce_motion: bool
+    # Which flourish is playing, or "" while resting or busy.
+    idle_anim: str = ""
 
 
 def reduce_motion_from_env(environ: dict[str, str] | None = None) -> bool:
@@ -171,6 +179,7 @@ def bot_pose(
     failed: bool = False,
     reduce_motion: bool | None = None,
     mood: str | None = None,
+    idle_for: float | None = None,
 ) -> BotPose:
     """Pose for one overlay tick.
 
@@ -205,6 +214,25 @@ def bot_pose(
     if settled:
         pulse = 0.65 if visual == "error" else 0.45
     glow = 0.55 + (0.40 if visual == "error" else 0.22) * pulse
+    flourish = ""
+    if not settled and visual == "idle":
+        if idle_for is None:
+            if state == "idle":
+                idle_for = phase / PHASE_PER_SEC
+            elif state == "done":
+                idle_for = max(0.0, (phase - SUCCESS_PHASE) / PHASE_PER_SEC)
+            else:
+                idle_for = 0.0
+        playing = idle_flourish(idle_for)
+        if playing is not None:
+            flourish, delta = playing
+            bob += delta.bob
+            tilt += delta.tilt
+            wave = min(1.0, max(0.0, wave + delta.wave))
+            chest = min(1.0, max(0.0, chest + delta.chest))
+            ring += delta.ring
+            # The antenna sits near the top of the window. Keep the hop inside it.
+            bob = min(9.5, bob)
     return BotPose(
         state=state,
         mood=visual,
@@ -225,7 +253,122 @@ def bot_pose(
         hot_rgb=_HOT[visual],
         glow=glow,
         reduce_motion=settled,
+        idle_anim=flourish,
     )
+
+
+# Seconds of sitting still before the first flourish, then how long each
+# one plays and how long the robot rests before the next. Add a flourish
+# by appending ``(name, function)`` to ``IDLE_ANIMATIONS``. The function
+# takes ``(t, duration)`` and returns an ``IdleDelta`` that is 0 at both ends.
+IDLE_TIMEOUT = 5.0
+IDLE_PLAY = 2.4
+IDLE_GAP = 1.6
+
+
+@dataclass(frozen=True)
+class IdleDelta:
+    """Added on top of the resting idle pose. Zero means "not this channel"."""
+
+    bob: float = 0.0
+    tilt: float = 0.0
+    wave: float = 0.0
+    chest: float = 0.0
+    ring: float = 0.0
+
+
+def _idle_unit(t: float, duration: float) -> float:
+    if duration <= 0:
+        return 0.0
+    return max(0.0, min(1.0, float(t) / float(duration)))
+
+
+def _idle_arch(t: float, duration: float) -> float:
+    """One smooth hump. 0 at the start and the end, 1 in the middle."""
+    return math.sin(math.pi * _idle_unit(t, duration))
+
+
+def _idle_fade(t: float, duration: float) -> float:
+    """1 through the middle, eased to 0 at both ends so a flourish can stop cleanly."""
+    p = _idle_unit(t, duration)
+    edge = 0.18
+    if p < edge:
+        u = p / edge
+        return u * u * (3.0 - 2.0 * u)
+    if p > 1.0 - edge:
+        u = (1.0 - p) / edge
+        return u * u * (3.0 - 2.0 * u)
+    return 1.0
+
+
+def _anim_sway(t: float, duration: float) -> IdleDelta:
+    """Rock side to side, twice, with a small weight shift."""
+    fade = _idle_fade(t, duration)
+    rock = math.sin(4.0 * math.pi * _idle_unit(t, duration))
+    shift = math.sin(2.0 * math.pi * _idle_unit(t, duration))
+    return IdleDelta(tilt=rock * 6.0 * fade, bob=shift * 1.1 * fade)
+
+
+def _anim_hop(t: float, duration: float) -> IdleDelta:
+    """One small jump and a soft landing."""
+    return IdleDelta(bob=_idle_arch(t, duration) * 8.0)
+
+
+def _anim_wave(t: float, duration: float) -> IdleDelta:
+    """Raise the free hand once, with a slight lean the other way."""
+    arch = _idle_arch(t, duration)
+    return IdleDelta(wave=arch * 0.9, tilt=arch * -3.0)
+
+
+def _anim_spin(t: float, duration: float) -> IdleDelta:
+    """A head tilt plus a partial turn of the energy ring. Not a full whirl."""
+    fade = _idle_fade(t, duration)
+    return IdleDelta(tilt=fade * 14.0, ring=fade * 1.15)
+
+
+def _anim_breathe(t: float, duration: float) -> IdleDelta:
+    """Two slow chest pulses and a tiny rise, quieter than the hop."""
+    fade = _idle_fade(t, duration)
+    unit = _idle_unit(t, duration)
+    pulse = 0.5 - 0.5 * math.cos(4.0 * math.pi * unit)
+    rise = math.sin(4.0 * math.pi * unit)
+    return IdleDelta(chest=pulse * 0.42 * fade, bob=rise * 2.0 * fade)
+
+
+# Order is the rotation. Extend this tuple; nothing else has to change.
+IDLE_ANIMATIONS: tuple[tuple[str, Callable[[float, float], IdleDelta]], ...] = (
+    ("sway", _anim_sway),
+    ("hop", _anim_hop),
+    ("wave", _anim_wave),
+    ("spin", _anim_spin),
+    ("breathe", _anim_breathe),
+)
+IDLE_NAMES = tuple(name for name, _fn in IDLE_ANIMATIONS)
+
+
+def idle_flourish(idle_for: float) -> tuple[str, IdleDelta] | None:
+    """The flourish for this many idle seconds, or None while busy waiting.
+
+    Before ``IDLE_TIMEOUT`` the robot holds its ordinary idle pose. After
+    that the five flourishes take turns. The gap between them is None, so
+    the pose eases back to rest instead of snapping into the next one.
+    """
+    try:
+        elapsed_idle = float(idle_for)
+    except (TypeError, ValueError):
+        return None
+    if elapsed_idle != elapsed_idle or elapsed_idle < IDLE_TIMEOUT:
+        return None
+    if IDLE_PLAY <= 0 or not IDLE_ANIMATIONS:
+        return None
+    slot = IDLE_PLAY + IDLE_GAP
+    elapsed = elapsed_idle - IDLE_TIMEOUT
+    index = int(elapsed // slot) % len(IDLE_ANIMATIONS)
+    local = elapsed - (int(elapsed // slot) * slot)
+    if local < 0.0 or local >= IDLE_PLAY:
+        return None
+    name, fn = IDLE_ANIMATIONS[index]
+    return name, fn(local, IDLE_PLAY)
 
 
 def describe_bot(

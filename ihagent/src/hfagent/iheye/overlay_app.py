@@ -35,15 +35,20 @@ from .look import (
     should_capture,
 )
 from .panels import (
-    SUMMARY_SECONDS,
+    SUMMARY_FOOTER,
     approval_body,
     drop_contents,
     drop_size,
     layout_drop,
+    page_metrics,
+    page_text,
     pointer_inside,
+    scroll_continues,
     should_restore_front,
     step_hover,
     step_summary_timer,
+    step_text_scroll,
+    summary_hold_for,
 )
 from .position import (
     Display,
@@ -777,6 +782,9 @@ def run_overlay(args, host: HostInfo) -> int:
             self._summary_left = 0.0
             self._summary_showing = False
             self.reply_text = ""
+            self._scroll_offset = 0.0
+            self._scroll_hold = 0.0
+            self._scroll_id = None
             self._working = False
             self._failed = False
             self._mode = "closed"
@@ -855,7 +863,7 @@ def run_overlay(args, host: HostInfo) -> int:
                 visible = self.panel is not None and bool(self.panel.isVisible())
                 if self.summary_enabled and text and visible:
                     self.summary_text = text
-                    self._summary_left = SUMMARY_SECONDS
+                    self._summary_left = summary_hold_for(text)
                     self._summary_showing = True
                 changed = True
             if "approval" in msg:
@@ -947,6 +955,8 @@ def run_overlay(args, host: HostInfo) -> int:
                 if not self._summary_showing:
                     self.summary_text = ""
             self._remember_front()
+            if self._eye_visible and self._mode != "closed":
+                self._advance_scroll(dt, inside or focused)
             self._sync_drop()
             pupil = None
             blink = 0.0
@@ -1035,7 +1045,15 @@ def run_overlay(args, host: HostInfo) -> int:
                 self._shown = None
                 self.drop.orderFrontRegardless()
             self._mode = mode
-            text_token = (self.reply_text, self.summary_text, self._approval_token())
+            identity = (mode, self.reply_text, self.summary_text, self._approval_token())
+            if identity != self._scroll_id:
+                if not scroll_continues(self._scroll_id, identity):
+                    self._scroll_offset = 0.0
+                    self._scroll_hold = 0.0
+                self._scroll_id = identity
+            # The integer line is the window. It changes only when the offset
+            # crosses a line, so a resting card is not rewritten every tick.
+            text_token = identity + (int(math.floor(max(0.0, self._scroll_offset))),)
             if text_token != self._shown:
                 self._shown = text_token
                 self._fill_drop(mode)
@@ -1075,26 +1093,68 @@ def run_overlay(args, host: HostInfo) -> int:
             _place_view(self.no, frames.get("no"))
 
         @objc.python_method
-        def _fill_drop(self, mode):
-            if self.drop_view is not None:
-                self.drop_view.mode = mode
-            if self.reply is None:
+        def _advance_scroll(self, dt, paused):
+            """Move the card's line offset. Activity on the card holds it still."""
+            mode = self._mode
+            if mode == "closed":
                 return
+            lines, _footer, slots = self._page_parts(mode)
+            self._scroll_offset, self._scroll_hold = step_text_scroll(
+                self._scroll_offset,
+                self._scroll_hold,
+                len(lines),
+                slots,
+                dt,
+                paused=bool(paused),
+            )
+
+        @objc.python_method
+        def _reply_size(self, mode):
+            width, height = drop_size(mode)
+            rect = layout_drop(mode, width, height).get("reply")
+            if rect is None:
+                return width - 24.0, max(20.0, height - 20.0)
+            return rect.w, rect.h
+
+        @objc.python_method
+        def _body_for(self, mode):
             tool = ""
             preview = ""
             if isinstance(self.approval, dict):
                 tool = str(self.approval.get("tool") or "")
                 preview = str(self.approval.get("preview") or "")
             if mode == "summary":
-                body = self.summary_text + "\n\nClick to open ihagent"
-            elif mode == "approval":
-                body = approval_body(tool, preview)
-            elif mode == "chat-approval":
+                return self.summary_text, SUMMARY_FOOTER
+            if mode == "approval":
+                return approval_body(tool, preview), ""
+            if mode == "chat-approval":
                 lead = self.reply_text or "Reply shows here"
-                body = lead + "\n" + approval_body(tool, preview)
-            else:
-                body = self.reply_text or "Reply shows here"
-            self.reply.setStringValue_(body)
+                return lead + "\n" + approval_body(tool, preview), ""
+            return (self.reply_text or "Reply shows here"), ""
+
+        @objc.python_method
+        def _page_parts(self, mode):
+            body, footer = self._body_for(mode)
+            width, height = self._reply_size(mode)
+            return page_metrics(body, width=width, height=height, footer=footer)
+
+        @objc.python_method
+        def _fill_drop(self, mode):
+            if self.drop_view is not None:
+                self.drop_view.mode = mode
+            if self.reply is None:
+                return
+            body, footer = self._body_for(mode)
+            width, height = self._reply_size(mode)
+            self.reply.setStringValue_(
+                page_text(
+                    body,
+                    width=width,
+                    height=height,
+                    offset=self._scroll_offset,
+                    footer=footer,
+                )
+            )
 
         def followDrag(self):
             if self._mode != "closed":
