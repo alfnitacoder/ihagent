@@ -582,8 +582,30 @@ def _page_closed(page: object) -> bool:
         return False
 
 
+# Playwright raises these when Chrome, the persistent context, or the driver
+# pipe is gone. A dead website (net::ERR_CONNECTION_CLOSED) does not match:
+# that token uses underscores, not this phrase.
+_CLOSED_CONTEXT_MARKERS = (
+    "target page, context or browser has been closed",
+    "targetclosederror",
+    "browser has been closed",
+    "connection closed",
+)
+
+
+def context_closed_error(exc: BaseException) -> bool:
+    """True when the browser context is dead and a new one must be launched."""
+    text = f"{type(exc).__name__}: {exc}".lower()
+    return any(marker in text for marker in _CLOSED_CONTEXT_MARKERS)
+
+
 class BrowserController:
-    """Lazy Playwright persistent context. All Playwright calls hop threads."""
+    """Lazy Playwright persistent context. All Playwright calls hop threads.
+
+    A live worker thread does not mean Chrome is alive. If the persistent
+    context has been closed or the browser crashed, the next call stops that
+    worker, launches a fresh context, and retries the operation once.
+    """
 
     def __init__(
         self,
@@ -599,6 +621,7 @@ class BrowserController:
         self._ready = threading.Event()
         self._start_error: BaseException | None = None
         self._started = False
+        self._dead = False
         self._pw = None
         self._context = None
         self._active = 0
@@ -606,9 +629,28 @@ class BrowserController:
 
     @property
     def started(self) -> bool:
+        """True only when the worker is up and its context is still usable.
+
+        Chrome can crash, or the persistent context can close, while the
+        worker thread is still blocked waiting for the next call. ``_dead``
+        records that, and a missing context means there is nothing to drive.
+        """
+        if self._dead or self._context is None:
+            return False
         return self._started and self._thread is not None and self._thread.is_alive()
 
+    def _restart_needed(self) -> bool:
+        """The worker is alive, but it is no longer attached to a live context."""
+        thread = self._thread
+        if thread is None or not thread.is_alive():
+            return False
+        if self._dead:
+            return True
+        return bool(self._started and self._context is None)
+
     def ensure(self) -> None:
+        if self._restart_needed():
+            self._stop_worker()
         with self._lock:
             if self.started:
                 return
@@ -617,6 +659,7 @@ class BrowserController:
             assert_dedicated_profile(self.settings.profile)
             self._check_playwright()
             self._start_error = None
+            self._dead = False
             self._ready = threading.Event()
             self._queue = queue.Queue()
             self._thread = threading.Thread(
@@ -648,9 +691,11 @@ class BrowserController:
             self._start_playwright()
         except Exception as exc:
             self._start_error = exc
-            self._stop_playwright()
+            self._close_browser(self._pw, self._context)
             self._ready.set()
             return
+        pw = self._pw
+        context = self._context
         self._ready.set()
         assert self._queue is not None
         while True:
@@ -661,8 +706,10 @@ class BrowserController:
             try:
                 reply.put((True, fn(*args)))
             except Exception as exc:
+                if context_closed_error(exc):
+                    self._dead = True
                 reply.put((False, exc))
-        self._stop_playwright()
+        self._close_browser(pw, context)
 
     def _start_playwright(self) -> None:
         if self._factory is not None:
@@ -721,14 +768,19 @@ class BrowserController:
                 return self._pw.chromium.launch_persistent_context(**kwargs)
             raise
 
-    def _stop_playwright(self) -> None:
-        ctx = self._context
-        pw = self._pw
-        self._context = None
-        self._pw = None
-        if ctx is not None:
+    def _close_browser(self, pw, context) -> None:
+        """Close this worker's Playwright objects, not a replacement's.
+
+        A relaunch can install a new context before a slow shutdown runs.
+        Closing the captured pair keeps that newer browser intact.
+        """
+        if self._context is context:
+            self._context = None
+        if self._pw is pw:
+            self._pw = None
+        if context is not None:
             try:
-                ctx.close()
+                context.close()
             except Exception:
                 pass
         if pw is not None:
@@ -737,7 +789,33 @@ class BrowserController:
             except Exception:
                 pass
 
-    def _call(self, fn, *args):
+    def _stop_worker(self) -> None:
+        """Stop the Playwright thread and forget its queue. Idempotent."""
+        with self._lock:
+            thread = self._thread
+            work = self._queue
+            self._started = False
+            self._thread = None
+            self._queue = None
+        if work is not None:
+            try:
+                work.put(None)
+            except Exception:
+                pass
+        if (
+            thread is not None
+            and thread.is_alive()
+            and thread is not threading.current_thread()
+        ):
+            thread.join(timeout=8)
+        self._dead = False
+
+    def _recover_closed_browser(self) -> None:
+        """Drop a worker whose context has already died."""
+        self._dead = True
+        self._stop_worker()
+
+    def _dispatch(self, fn, args):
         self.ensure()
         if self._queue is None:
             raise BrowserError("browser is not running")
@@ -752,27 +830,33 @@ class BrowserController:
             raise payload
         return payload
 
+    def _call(self, fn, *args):
+        try:
+            return self._dispatch(fn, args)
+        except Exception as exc:
+            if not context_closed_error(exc):
+                raise
+            self._recover_closed_browser()
+        try:
+            return self._dispatch(fn, args)
+        except Exception as exc:
+            if context_closed_error(exc):
+                # The replacement died too. Leave it stopped so the next
+                # call can launch again, instead of pinning a dead context.
+                self._recover_closed_browser()
+            raise
+
     def close(self) -> str:
         with self._lock:
             thread = self._thread
-            work = self._queue
-            running = bool(self._started or (thread is not None and thread.is_alive()))
-            self._started = False
-            self._thread = None
-            self._queue = None
+            running = bool(
+                self._started
+                or self._dead
+                or (thread is not None and thread.is_alive())
+            )
+        self._stop_worker()
         if not running:
             return "browser is not running"
-        if work is not None:
-            try:
-                work.put(None)
-            except Exception:
-                pass
-        if (
-            thread is not None
-            and thread.is_alive()
-            and thread is not threading.current_thread()
-        ):
-            thread.join(timeout=8)
         return "browser closed"
 
     def status(self) -> str:

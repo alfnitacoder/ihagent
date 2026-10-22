@@ -13,6 +13,7 @@ from hfagent.browser import (
     approval_reason,
     assert_dedicated_profile,
     browser_command,
+    context_closed_error,
     format_search_results,
     format_snapshot,
     get_controller,
@@ -153,6 +154,10 @@ class FakePage:
         return self._title
 
     def goto(self, url, **kwargs):
+        if getattr(self.context, "dead", False):
+            raise TargetClosedError(
+                "Page.goto: Target page, context or browser has been closed"
+            )
         self.url = url
         self._title = "Example"
 
@@ -203,13 +208,22 @@ class FakePage:
         self.waited.append({"timeout": ms})
 
 
+class TargetClosedError(Exception):
+    """Stand-in for playwright.sync_api.TargetClosedError."""
+
+
 class FakeContext:
     def __init__(self):
         self.pages = []
         self.closed = False
+        self.dead = False
         self.search_results = []
 
     def new_page(self):
+        if self.dead:
+            raise TargetClosedError(
+                "BrowserContext.new_page: Target page, context or browser has been closed"
+            )
         page = FakePage(self)
         self.pages.append(page)
         return page
@@ -223,14 +237,22 @@ class FakePlaywright:
         self.context = FakeContext()
         self.attempts = []
         self.stopped = False
+        self.stop_count = 0
+        self.start_count = 0
         self.fail_channels = set()
         self.fail_executable = False
+        # When set, each launch returns a new context. ``spawn_dead`` makes
+        # that context's new_page raise TargetClosedError.
+        self.spawn_new_context = False
+        self.spawn_dead = False
 
     def start(self):
+        self.start_count += 1
         return self
 
     def stop(self):
         self.stopped = True
+        self.stop_count += 1
 
     @property
     def chromium(self):
@@ -243,6 +265,9 @@ class FakePlaywright:
             raise RuntimeError(f"channel {channel} failed")
         if kwargs.get("executable_path") and self.fail_executable:
             raise RuntimeError("executable failed")
+        if self.spawn_new_context:
+            self.context = FakeContext()
+            self.context.dead = bool(self.spawn_dead)
         return self.context
 
 
@@ -469,6 +494,153 @@ def test_open_uses_dedicated_profile_and_is_lazy(tmp_path, monkeypatch):
     assert "closed" in ctrl.close()
     assert ctrl._pw_fake.stopped is True
     assert ctrl._pw_fake.context.closed is True
+
+
+@pytest.mark.parametrize(
+    ("exc", "closed"),
+    [
+        (
+            TargetClosedError(
+                "BrowserContext.new_page: Target page, context or browser has been closed"
+            ),
+            True,
+        ),
+        (RuntimeError("Browser has been closed"), True),
+        (RuntimeError("Connection closed while reading from the driver"), True),
+        (
+            RuntimeError("Page.goto: net::ERR_CONNECTION_CLOSED at https://example.com"),
+            False,
+        ),
+        (BrowserError("no element e99"), False),
+    ],
+)
+def test_context_closed_error_matches_a_dead_browser_only(exc, closed):
+    assert context_closed_error(exc) is closed
+
+
+def test_closed_context_new_page_relaunches_and_the_retry_succeeds(tmp_path, monkeypatch):
+    pw = FakePlaywright()
+    ctrl = _controller(tmp_path, monkeypatch, playwright=pw, chrome_path=None)
+    ctrl.open_url("https://example.com/one")
+    assert ctrl.started is True
+    first = pw.context
+    # The tab is gone and Chrome rejects new_page, but the worker is still alive.
+    first.pages.clear()
+    first.dead = True
+    assert ctrl._thread is not None and ctrl._thread.is_alive()
+    pw.spawn_new_context = True
+
+    result = ctrl.open_url("https://example.com/two")
+
+    assert "https://example.com/two" in result
+    assert len(pw.attempts) == 2
+    assert pw.start_count == 2
+    assert first.closed is True
+    assert pw.context is not first
+    assert not pw.context.dead
+    assert pw.context.pages[0].url == "https://example.com/two"
+    assert ctrl.started is True
+    ctrl.open_url("https://example.com/three")
+    assert len(pw.attempts) == 2
+    ctrl.close()
+
+
+def test_open_relaunches_when_the_live_page_target_is_closed(tmp_path, monkeypatch):
+    pw = FakePlaywright()
+    ctrl = _controller(tmp_path, monkeypatch, playwright=pw, chrome_path=None)
+    reset_controller_for_tests(ctrl)
+    opened = BrowserOpen().run(url="https://example.com/one")
+    assert "https://example.com/one" in opened
+    first = pw.context
+    first.dead = True
+    pw.spawn_new_context = True
+
+    recovered = BrowserOpen().run(url="https://example.com/two")
+
+    assert "https://example.com/two" in recovered
+    assert "has been closed" not in recovered
+    assert not recovered.startswith("Error:")
+    assert len(pw.attempts) == 2
+    assert first.closed is True
+    assert pw.context.pages[0].url == "https://example.com/two"
+    ctrl.close()
+
+
+def test_closed_context_is_relaunched_only_once(tmp_path, monkeypatch):
+    pw = FakePlaywright()
+    ctrl = _controller(tmp_path, monkeypatch, playwright=pw, chrome_path=None)
+    ctrl.open_url("https://example.com/one")
+    pw.context.pages.clear()
+    pw.context.dead = True
+    pw.spawn_new_context = True
+    pw.spawn_dead = True
+
+    with pytest.raises(TargetClosedError, match="has been closed"):
+        ctrl.open_url("https://example.com/two")
+
+    assert len(pw.attempts) == 2
+    assert ctrl.started is False
+    # The failed replacement was torn down, so a later call can launch again.
+    pw.spawn_dead = False
+    result = ctrl.open_url("https://example.com/three")
+    assert "https://example.com/three" in result
+    assert len(pw.attempts) == 3
+    assert ctrl.started is True
+    ctrl.close()
+
+
+def test_ensure_relaunches_when_the_thread_is_alive_but_the_context_is_dead(
+    tmp_path, monkeypatch
+):
+    pw = FakePlaywright()
+    ctrl = _controller(tmp_path, monkeypatch, playwright=pw, chrome_path=None)
+    ctrl.open_url("https://example.com/one")
+    assert ctrl.started is True
+    assert ctrl._thread is not None and ctrl._thread.is_alive()
+    first = pw.context
+    ctrl._dead = True
+    assert ctrl.started is False
+    pw.spawn_new_context = True
+
+    result = ctrl.open_url("https://example.com/two")
+
+    assert "https://example.com/two" in result
+    assert len(pw.attempts) == 2
+    assert first.closed is True
+    assert pw.context is not first
+    assert ctrl.started is True
+    assert ctrl._dead is False
+    ctrl.close()
+
+
+def test_unrelated_browser_error_does_not_relaunch(tmp_path, monkeypatch):
+    pw = FakePlaywright()
+    ctrl = _controller(tmp_path, monkeypatch, playwright=pw, chrome_path=None)
+    ctrl.open_url("https://example.com")
+    pw.context.pages[0].missing.add("e99")
+    with pytest.raises(BrowserError, match="no element e99"):
+        ctrl.click("e99")
+    assert len(pw.attempts) == 1
+    assert pw.start_count == 1
+    assert ctrl.started is True
+    ctrl.close()
+
+
+def test_site_connection_reset_does_not_relaunch(tmp_path, monkeypatch):
+    pw = FakePlaywright()
+    ctrl = _controller(tmp_path, monkeypatch, playwright=pw, chrome_path=None)
+    ctrl.open_url("https://example.com")
+    page = pw.context.pages[0]
+
+    def boom(url, **kwargs):
+        raise RuntimeError(f"Page.goto: net::ERR_CONNECTION_CLOSED at {url}")
+
+    page.goto = boom
+    with pytest.raises(RuntimeError, match="ERR_CONNECTION_CLOSED"):
+        ctrl.open_url("https://down.example")
+    assert len(pw.attempts) == 1
+    assert ctrl.started is True
+    ctrl.close()
 
 
 def test_macos_chrome_falls_back_to_chromium(tmp_path, monkeypatch):
