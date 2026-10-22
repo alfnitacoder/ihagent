@@ -697,11 +697,20 @@ def format_config_report(config: "Config") -> str:
         shown = mask_secret(value) if secret else (value or "(unset)")
         source = config.sources.get(name, "default")
         lines.append(f"{name}={shown}  [{source}]")
+    lines.extend(_assist_report_lines())
     lines.extend(_browser_report_lines())
     lines.extend(_iheye_report_lines())
     lines.extend(_mouse_report_lines())
     lines.extend(_mcp_report_lines())
     return "\n".join(lines)
+
+
+def _assist_report_lines() -> list[str]:
+    try:
+        from .assist.settings import report_lines
+    except Exception:
+        return []
+    return report_lines()
 
 
 def _mouse_report_lines() -> list[str]:
