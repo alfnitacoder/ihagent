@@ -48,9 +48,44 @@ def glide_seconds(distance: float, reduce_motion: bool) -> float:
     return min(0.7, max(0.18, distance / 1800.0))
 
 
+def clamp_overlay_scale(value: object) -> float:
+    """Cursor size. ``1`` is the designed arrow. Clamped to a visible range."""
+    try:
+        number = float(value)  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        return 1.0
+    if number != number:
+        return 1.0
+    return min(2.5, max(0.6, number))
+
+
+def overlay_scale(environ: dict[str, str] | None = None) -> float:
+    """``HFAGENT_MOUSE_OVERLAY_SCALE``. Unset means ``1``."""
+    env = os.environ if environ is None else environ
+    return clamp_overlay_scale(env.get("HFAGENT_MOUSE_OVERLAY_SCALE", "1") or "1")
+
+
+def overlay_labels(environ: dict[str, str] | None = None) -> bool:
+    """Action labels (``Click: Save``). ``HFAGENT_MOUSE_OVERLAY_LABEL`` off hides them.
+
+    The IH badge drawn on the cursor is not this label.
+    """
+    env = os.environ if environ is None else environ
+    raw = str(env.get("HFAGENT_MOUSE_OVERLAY_LABEL", "")).strip().lower()
+    return raw not in {"0", "false", "no", "off"}
+
+
 def effect_for(action: str) -> str:
-    """Click and key pulse. Typing shows dots. Move and scroll only highlight."""
-    if action in {"click", "double_click", "right_click", "key"}:
+    """Left click and keys pulse. Right and double click are their own ripples.
+
+    Typing shows dots. Move and scroll only highlight; the glide itself
+    leaves a trail.
+    """
+    if action == "double_click":
+        return "double"
+    if action == "right_click":
+        return "right"
+    if action in {"click", "key"}:
         return "pulse"
     if action == "type":
         return "typing"
@@ -86,6 +121,9 @@ class Frame:
     phase: float
     holding: bool
     arrived: bool
+    trail: tuple[tuple[float, float], ...] = ()
+    scale: float = 1.0
+    show_label: bool = True
 
 
 def make_cue(
@@ -107,21 +145,26 @@ def make_cue(
         label = f"{verb}: {_short(name)}"
     else:
         label = verb
+    if action == "show":
+        return Cue("show", float(x), float(y), "", None)
     if bounds is None:
         bounds = Rect(float(x) - 16.0, float(y) - 16.0, 32.0, 32.0)
     return Cue(action, float(x), float(y), label, bounds)
 
 
 def cue_from_message(message: dict) -> Cue:
+    action = str(message.get("action") or "")
     raw = message.get("bounds")
     bounds = None
-    if isinstance(raw, (list, tuple)) and len(raw) == 4:
-        bounds = Rect(float(raw[0]), float(raw[1]), float(raw[2]), float(raw[3]))
+    if action != "show" and message.get("highlight") is not False:
+        if isinstance(raw, (list, tuple)) and len(raw) == 4:
+            bounds = Rect(float(raw[0]), float(raw[1]), float(raw[2]), float(raw[3]))
+    label = "" if action == "show" else str(message.get("label") or "")
     return Cue(
-        str(message.get("action") or ""),
+        action,
         float(message.get("x") or 0),
         float(message.get("y") or 0),
-        str(message.get("label") or ""),
+        label,
         bounds,
     )
 
@@ -147,13 +190,35 @@ class CursorMotion:
         self.holding = False
         self.visible = False
         self.suspended = False
+        self.sticky = False
         self.phase = 0.0
+        self.scale = overlay_scale()
+        self.show_label = overlay_labels()
+        self.trail: list[tuple[float, float]] = []
+        self._trail_left = 0.0
 
     @property
     def arrived(self) -> bool:
         return self._glide >= 1.0
 
+    def set_style(self, scale: float | None = None, labels: bool | None = None) -> None:
+        if scale is not None:
+            self.scale = clamp_overlay_scale(scale)
+        if labels is not None:
+            self.show_label = bool(labels)
+
+    def _remember(self, x: float, y: float) -> None:
+        point = (float(x), float(y))
+        if self.trail:
+            last = self.trail[-1]
+            if math.hypot(point[0] - last[0], point[1] - last[1]) < 6.0:
+                return
+        self.trail.append(point)
+        if len(self.trail) > 28:
+            del self.trail[:-28]
+
     def propose(self, cue: Cue, origin: tuple[float, float] | None = None) -> None:
+        was_visible = self.visible
         if self.visible:
             self._sx, self._sy = self.x, self.y
         elif origin is not None:
@@ -161,6 +226,9 @@ class CursorMotion:
             self.x, self.y = self._sx, self._sy
         else:
             self._sx, self._sy = self.x, self.y
+        if not was_visible:
+            self.trail.clear()
+        self._remember(self._sx, self._sy)
         self._tx, self._ty = float(cue.x), float(cue.y)
         distance = math.hypot(self._tx - self._sx, self._ty - self._sy)
         self.glide_duration = glide_seconds(distance, self.reduce_motion)
@@ -193,9 +261,12 @@ class CursorMotion:
         self.visible = False
         self.holding = False
         self.suspended = False
+        self.sticky = False
         self.label = ""
         self.bounds = None
         self.effect = ""
+        self.trail.clear()
+        self._trail_left = 0.0
 
     def suspend(self) -> None:
         """Hide for a screenshot. The target is remembered."""
@@ -207,26 +278,40 @@ class CursorMotion:
     def tick(self, dt: float) -> Frame:
         dt = max(0.0, float(dt))
         self.phase += dt
-        if self._glide < 1.0 and self.glide_duration > 0.0:
+        moving = self._glide < 1.0 and self.glide_duration > 0.0
+        if moving:
             self._glide = min(1.0, self._glide + dt / self.glide_duration)
             blended = smoothstep(self._glide)
             self.x = self._sx + (self._tx - self._sx) * blended
             self.y = self._sy + (self._ty - self._sy) * blended
+            self._remember(self.x, self.y)
+            self._trail_left = 0.45
         elif self._glide < 1.0:
             self._glide = 1.0
             self.x, self.y = self._tx, self._ty
+            self._remember(self.x, self.y)
+        elif self.trail and self._trail_left > 0.0:
+            self._trail_left -= dt
+            if self._trail_left <= 0.0:
+                self.trail.clear()
         if self.effect:
             self.effect_age += dt
-            limit = PULSE_SECONDS if self.effect == "pulse" else 1.4
+            limit = 1.4 if self.effect == "typing" else PULSE_SECONDS
             if self.effect_age >= limit and not self.holding:
                 self.effect = ""
-        if self.visible and not self.holding and not self.suspended and self.arrived:
+        if (
+            self.visible
+            and not self.holding
+            and not self.suspended
+            and not self.sticky
+            and self.arrived
+        ):
             self.idle += dt
         return self.frame()
 
     def frame(self) -> Frame:
         opacity = 1.0 if self.visible else 0.0
-        if self.visible and not self.holding and self.idle > IDLE_SECONDS:
+        if self.visible and not self.holding and not self.sticky and self.idle > IDLE_SECONDS:
             fade = (self.idle - IDLE_SECONDS) / FADE_SECONDS
             opacity = max(0.0, 1.0 - fade)
             if opacity <= 0.0:
@@ -234,7 +319,7 @@ class CursorMotion:
                 opacity = 0.0
         showing = self.visible and not self.suspended and opacity > 0.0
         effect_p = 0.0
-        if self.effect == "pulse":
+        if self.effect in {"pulse", "double", "right"}:
             effect_p = min(1.0, self.effect_age / PULSE_SECONDS)
         elif self.effect == "typing":
             effect_p = self.effect_age
@@ -250,6 +335,9 @@ class CursorMotion:
             phase=self.phase,
             holding=self.holding,
             arrived=self.arrived,
+            trail=tuple(self.trail),
+            scale=self.scale,
+            show_label=self.show_label,
         )
 
 
@@ -264,7 +352,19 @@ class OverlayShow:
     def handle(self, message: dict) -> list[dict]:
         op = str(message.get("op") or "")
         seq = message.get("seq")
+        if op == "configure":
+            scale = message.get("scale") if "scale" in message else None
+            labels = message.get("labels") if "labels" in message else None
+            self.motion.set_style(scale, labels)
+            return []
         if op == "propose":
+            if message.get("sticky"):
+                self.motion.sticky = True
+            if "scale" in message or "labels" in message:
+                self.motion.set_style(
+                    message.get("scale") if "scale" in message else None,
+                    message.get("labels") if "labels" in message else None,
+                )
             origin = None
             if "ox" in message and "oy" in message:
                 origin = (float(message["ox"]), float(message["oy"]))

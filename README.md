@@ -90,7 +90,7 @@ Mouse control is optional and off until `/mouse on`. From the same venv:
 python -m pip install -e "ihagent[desktop]"
 ```
 
-That pulls in pyautogui, pynput, and the PyObjC frameworks used to read the focused app (including ApplicationServices). The same frameworks draw the ihmouse pointer: a small click-through robot on top of every display. Then grant Accessibility, and Screen Recording if a vision model will look at the window. The steps are in [Mouse control](#mouse-control).
+That pulls in pyautogui, pynput, and the PyObjC frameworks used to read the focused app (including ApplicationServices). The same frameworks draw the ihmouse pointer: a glowing arrow with an IH badge, click-through, on top of every display. Then grant Accessibility, and Screen Recording if a vision model will look at the window. The steps are in [Mouse control](#mouse-control).
 
 ### Linux
 
@@ -122,7 +122,7 @@ chmod 600 ~/.hfagent/.env
 ihagent
 ```
 
-Mouse control is the same optional extra as on macOS (`pip install -e "ihagent[desktop]"`). The pip extra installs pyautogui, pynput, `python-xlib`, and PySide6. PySide6 draws the ihmouse pointer. The accessibility tree needs the distro package, which pip cannot install reliably:
+Mouse control is the same optional extra as on macOS (`pip install -e "ihagent[desktop]"`). The pip extra installs pyautogui, pynput, `python-xlib`, and PySide6. PySide6 draws the ihmouse pointer (the same glowing arrow). The accessibility tree needs the distro package, which pip cannot install reliably:
 
 ```bash
 # Debian or Ubuntu
@@ -178,7 +178,7 @@ Mouse control is optional. From the same venv, with double quotes:
 python -m pip install -e "ihagent[desktop]"
 ```
 
-That installs pyautogui, pynput, pywinauto, and PySide6. UI Automation reads the focused window. PySide6 draws the ihmouse pointer. A vision-model fallback needs a screenshot, which pyautogui takes. See [Mouse control](#mouse-control).
+That installs pyautogui, pynput, pywinauto, and PySide6. UI Automation reads the focused window. PySide6 draws the ihmouse pointer (the same glowing arrow). A vision-model fallback needs a screenshot, which pyautogui takes. See [Mouse control](#mouse-control).
 
 If `Activate.ps1` is blocked, run `Set-ExecutionPolicy -Scope CurrentUser RemoteSigned` and try again. You can skip activation and call `.venv\Scripts\python` and `.venv\Scripts\ihagent.exe` by path.
 
@@ -353,7 +353,9 @@ The first source that sets a value wins. `ihagent --show-config` and `/config` p
 | `HFAGENT_MOUSE` | off | `1` / `on` allows desktop mouse tools. `/mouse on` and `/mouse off` persist it. Nothing watches the screen while this is off. |
 | `HFAGENT_MOUSE_APPROVAL` | `per-action` | `per-task` asks once per user turn. `per-action` asks before every click, type, key, scroll, move, and screen description. |
 | `HFAGENT_MOUSE_STOP_HOTKEY` | `ctrl+alt+esc` | Chord that stops further mouse actions while `/mouse` is on. A pointer in a screen corner does the same. |
-| `HFAGENT_MOUSE_OVERLAY` | on | `0` / `off` hides the ihmouse robot. `/mouse overlay on` and `/mouse overlay off` persist it. The system pointer still moves. |
+| `HFAGENT_MOUSE_OVERLAY` | on | `0` / `off` hides the ihmouse arrow. `/mouse overlay on` and `/mouse overlay off` persist it. The system pointer still moves. |
+| `HFAGENT_MOUSE_OVERLAY_LABEL` | on | `0` / `off` hides the action label (`Click: Save`). The IH badge on the arrow stays. `/mouse overlay label on\|off`. |
+| `HFAGENT_MOUSE_OVERLAY_SCALE` | `1` | Arrow size from `0.6` to `2.5`. `/mouse overlay scale 1.4`. |
 | `HFAGENT_VISION_MODEL` | current model, if it can see | Vision model for screenshot fallback. Text-only chat models (including Ollama Cloud `gpt-oss:120b`) are not used. |
 | `HFAGENT_VISION_BASE_URL` | current chat host | Optional OpenAI-compatible `/v1` URL for the vision model. |
 | `HFAGENT_VISION_API_KEY` | current chat key | Optional key for that vision host. |
@@ -763,7 +765,7 @@ Coordinates keep multi-monitor layouts and HiDPI. The origin is the top-left of 
 
 ### Safety
 
-- The tools error until `/mouse on`. Turning it on does not start a capture loop.
+- The tools error until `/mouse on`, and that error tells the model to ask you to run it. `/mouse on`, `/mouse off`, `/mouse stop`, and `/mouse overlay on|off` rewrite the system prompt and add a note the model reads on its next turn. Turning it on does not start a capture loop, and it does not by itself start a new model turn.
 - Each click, move, scroll, key, type, and screen description asks for y/N, even when `/approval auto` is on. `/mouse approval per-task` asks once for that user turn and asks again on the next message.
 - Emergency stop: move the pointer into any screen corner (including the pyautogui corner at `0,0`), or press `ctrl+alt+esc` (change it with `HFAGENT_MOUSE_STOP_HOTKEY`). `/mouse stop` does the same. Further actions refuse until `/mouse on`.
 - The hotkey listener runs only while mouse control is on. It listens for that chord. It does not record other keys.
@@ -772,15 +774,27 @@ Coordinates keep multi-monitor layouts and HiDPI. The origin is the top-left of 
 
 ### On-screen pointer
 
-While mouse control is on, **ihmouse** draws IHAgent's own pointer: a small robot cursor in the iheye style (white body, black face, cyan eyes, glowing cyan ring). It is a transparent, always-on-top, click-through window that covers every display. It does not receive clicks, and it does not capture the screen. The system pointer is still what clicks.
+While mouse control is on, **ihmouse** draws IHAgent's own pointer: a glowing arrow with a cyan halo, white fill, and a small IH badge (white body, black face, cyan eyes — the same colours as the iheye bubble). It is not the system cursor. The system pointer is still what clicks.
 
-When an action is proposed, the robot glides from where it is to the target and draws a cyan rounded rectangle around that element's bounds, with a label such as `Click: Save`, for as long as the approval prompt is up. A click then pulses. Typing shows three cyan dots. After you confirm, the real system pointer performs the action. A few seconds after it goes idle, the robot fades. `/mouse off`, `/mouse stop`, and a declined prompt hide it immediately.
+The arrow is a transparent, always-on-top, click-through overlay. It does not receive clicks, and it does not capture the screen. `/mouse on` shows it at the current pointer and leaves it up for as long as mouse control stays on. `/mouse off`, `/mouse stop`, `/mouse overlay off`, and a declined prompt hide it.
 
-`/mouse overlay off` hides it and saves `HFAGENT_MOUSE_OVERLAY=0`. `/mouse overlay on` brings it back. `HFAGENT_IHEYE_REDUCE_MOTION=1` snaps the glide instead of animating it.
+When an action is proposed, the arrow glides from where it is to the target (it does not teleport) and draws a cyan rounded rectangle around that element's bounds, with a label such as `Click: Save`, for as long as the approval prompt is up. A left click ripples cyan. A double-click draws two rings. A right-click draws a rose square. A move leaves a cyan trail. Typing shows three cyan dots. After you confirm, the real system pointer performs the action.
 
-macOS draws it with AppKit, the same kind of non-activating floating panel as the iheye bubble, and marks the window so screenshots skip it. Windows and Linux draw it with PySide6 (a frameless Qt tool window that does not accept input). Windows also sets the extended style so clicks pass through and screen capture excludes the window. Coordinates stay in pointer space: a display left of the primary keeps a negative x, and HiDPI scale is not applied on top of points or logical pixels.
+`/mouse overlay off` hides it and saves `HFAGENT_MOUSE_OVERLAY=0`. `/mouse overlay on` brings it back. `/mouse overlay label off` hides only the action label. `/mouse overlay scale 1.4` enlarges the arrow (`0.6`–`2.5`). `HFAGENT_IHEYE_REDUCE_MOTION=1` snaps the glide instead of animating it.
 
-If PyObjC or PySide6 is missing, or Linux has no `DISPLAY` or `WAYLAND_DISPLAY`, mouse actions still run and the tool log says the overlay is unavailable. On Wayland, click-through is best-effort; if the desktop cannot pass clicks through, turn the overlay off.
+macOS draws one AppKit panel per display, the same kind of non-activating panel as the iheye bubble, above normal windows, and marks each panel so screenshots skip it. A panel per screen keeps Retina and non-Retina displays in their own points; one window stretched across both was the wrong size and often never appeared. The overlay process creates `NSApplication` on its main thread before any other thread, and it redraws with `setNeedsDisplay` so the window server actually composites the arrow. Windows and Linux draw it with PySide6 (a frameless Qt tool window that does not accept input). Windows also sets the extended style so clicks pass through and screen capture excludes the window. Coordinates stay in pointer space: a display left of the primary keeps a negative x, and HiDPI scale is not applied on top of points or logical pixels.
+
+If PyObjC or PySide6 is missing, or Linux has no `DISPLAY` or `WAYLAND_DISPLAY`, mouse actions still run and `/mouse` prints why the overlay is unavailable (including the helper's stderr when it crashed). On Wayland, click-through is best-effort; if the desktop cannot pass clicks through, turn the overlay off.
+
+#### Verify on a Mac
+
+1. `pip install 'ihagent[desktop]'` and start ihagent with that Python.
+2. System Settings → Privacy & Security → Accessibility: enable that Python. Screen Recording is only needed when a vision model looks at the window. The arrow itself is a window, not a capture.
+3. `/mouse on`. A glowing arrow with an IH badge should sit on the pointer, distinct from the macOS cursor. It stays while mouse control is on.
+4. Ask the agent to click a button. The arrow glides to it, the control is outlined, and the label reads `Click: Save` (or whatever the control is named). Confirm. A cyan ripple plays, then the real cursor clicks.
+5. A right-click shows a rose square; a double-click shows two rings; a move leaves a trail.
+6. Drag a window to a second display, including a Retina one. The arrow should cross the boundary without jumping scale.
+7. `/mouse overlay scale 1.4` enlarges it. `/mouse overlay label off` drops the text. `/mouse overlay off` and `/mouse off` hide it. `/mouse` prints a startup error if the helper could not open.
 
 ### Vision model
 
@@ -906,7 +920,7 @@ A dedicated Hugging Face GPU endpoint is a different host. `scripts/setup-huggin
 | `/browser [close]` | Chrome status, or close the window. |
 | `/mcp` | List MCP servers, status, and tool counts. Subcommands: `add`, `remove`, `login`, `tools`, `reload`, `enable`, `disable`. |
 | `/iheye [on\|off]` | macOS floating bubble. `track on\|off`, `summary on\|off`, and `look on\|off` toggle gaze, the completion card, and one-shot capture. |
-| `/mouse [on\|off]` | Desktop pointer. Off until `on`. `overlay on\|off` shows or hides the ihmouse robot. `approval per-action\|per-task`, `log`, and `stop`. |
+| `/mouse [on\|off]` | Desktop pointer. Off until `on`. `overlay on\|off` shows or hides the ihmouse arrow. `overlay label on\|off` and `overlay scale 0.6–2.5` customise it. `approval per-action\|per-task`, `log`, and `stop`. |
 | `/memory` | Show long-term memory. |
 | `/forget` | Wipe long-term memory. |
 | `/skills` | List coding skills. |
@@ -972,7 +986,7 @@ A dedicated Hugging Face GPU endpoint is a different host. `scripts/setup-huggin
 | `iheye: Safari did not share page text…` | Safari → Develop → Allow JavaScript from Apple Events, then ask again. |
 | `iheye: looking at this window needs Screen Recording permission…` | System Settings → Privacy & Security → Screen Recording, and enable the Python that runs ihagent. |
 | `iheye: keyboard glances need Accessibility permission …` | Pointer tracking still works. System Settings → Privacy & Security → Accessibility, and enable the Python that runs ihagent. |
-| `mouse control is off` | `/mouse on`. The tools do nothing until then, and they do not watch the screen. |
+| `mouse control is off` | `/mouse on`. The tool result tells the model to ask you for that. The next turn is told mouse control is on. Nothing watches the screen while it is off. |
 | `mouse control needs the optional desktop extra` | `pip install 'ihagent[desktop]'` (Windows: double quotes). |
 | `macOS Accessibility permission is off` | System Settings → Privacy & Security → Accessibility. Enable the Python that runs ihagent. |
 | `needs Screen Recording permission` | System Settings → Privacy & Security → Screen Recording. Same Python. Element clicks still work without it. |
@@ -980,8 +994,8 @@ A dedicated Hugging Face GPU endpoint is a different host. `scripts/setup-huggin
 | `Windows UI Automation is not available` | `pip install "ihagent[desktop]"`. The focused app has to expose UI Automation. |
 | `no vision model is configured` | Set `HFAGENT_VISION_MODEL` (for example `qwen2.5vl`). Optional `HFAGENT_VISION_BASE_URL` and `HFAGENT_VISION_API_KEY` default to the current chat host. |
 | `refusing to type into a password field` | Expected. Mouse control does not enter secrets. Click a normal field, or press Tab / Escape to leave the password field. |
-| `emergency stop` | The pointer was in a corner, the stop hotkey fired, or you ran `/mouse stop`. `/mouse on` resumes. The ihmouse robot hides until then. |
-| `ihmouse overlay needs PyObjC` / `needs PySide6` / `needs a graphical session` | The robot cannot be drawn. Install `ihagent[desktop]` (PySide6 is included off macOS). On Linux, run inside a graphical session. Clicks still use the system pointer. `/mouse overlay off` silences it. |
+| `emergency stop` | The pointer was in a corner, the stop hotkey fired, or you ran `/mouse stop`. `/mouse on` resumes. The ihmouse arrow hides until then. |
+| `ihmouse overlay needs PyObjC` / `needs PySide6` / `needs a graphical session` / `did not start` | The arrow cannot be drawn. Install `ihagent[desktop]` (PySide6 is included off macOS). On Linux, run inside a graphical session. `/mouse` includes the helper's error when it exited. Clicks still use the system pointer. `/mouse overlay off` silences it. On macOS the helper is its own process: grant Accessibility to the same Python, then `/mouse on` again. |
 
 Connection errors name the base URL. `ihagent --show-config` is the first check when the wrong host or the wrong key is in use: a process value copied from `source ~/.hfagent/hf.env` is attributed to that file, so a project `.env` can still override it. Export a different value when the shell should win.
 

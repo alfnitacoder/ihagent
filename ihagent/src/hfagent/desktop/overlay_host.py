@@ -14,7 +14,7 @@ import sys
 import threading
 from typing import Any, Callable
 
-from .overlay_motion import Cue
+from .overlay_motion import Cue, overlay_labels, overlay_scale
 from .overlay_window import backend_note, module_available
 
 
@@ -85,6 +85,12 @@ class NullOverlay:
     def close(self) -> None:
         return None
 
+    def present(self, x: float, y: float) -> None:
+        return None
+
+    def restyle(self) -> None:
+        return None
+
 
 class RecordingOverlay(NullOverlay):
     """In-memory client for tests. Calls are instant."""
@@ -120,6 +126,12 @@ class RecordingOverlay(NullOverlay):
     def close(self) -> None:
         self.events.append(("close",))
 
+    def present(self, x: float, y: float) -> None:
+        self.events.append(("present", float(x), float(y)))
+
+    def restyle(self) -> None:
+        self.events.append(("restyle", overlay_scale(), overlay_labels()))
+
 
 class LiveOverlay:
     """Spawn ``python -m hfagent.desktop.overlay_main`` on the first propose."""
@@ -138,6 +150,10 @@ class LiveOverlay:
         self._waiting = 0
         self._noted = False
         self._reader: threading.Thread | None = None
+        self._stderr_tail = ""
+
+    def _style_fields(self) -> dict[str, Any]:
+        return {"scale": overlay_scale(), "labels": overlay_labels(), "sticky": True}
 
     def propose(self, cue: Cue, origin: tuple[float, float] | None = None) -> None:
         if not self._ensure():
@@ -161,7 +177,32 @@ class LiveOverlay:
         if origin is not None:
             payload["ox"] = origin[0]
             payload["oy"] = origin[1]
+        payload.update(self._style_fields())
         self._send(payload)
+
+    def present(self, x: float, y: float) -> None:
+        """Show the arrow at ``(x, y)`` and keep it up while mouse control stays on."""
+        if not self._ensure():
+            return
+        self._seq += 1
+        payload: dict[str, Any] = {
+            "op": "propose",
+            "seq": self._seq,
+            "x": float(x),
+            "y": float(y),
+            "label": "",
+            "action": "show",
+            "highlight": False,
+            "ox": float(x),
+            "oy": float(y),
+        }
+        payload.update(self._style_fields())
+        self._send(payload)
+
+    def restyle(self) -> None:
+        if self._proc is None or self._proc.poll() is not None:
+            return
+        self._send({"op": "configure", "scale": overlay_scale(), "labels": overlay_labels()})
 
     def act(self, effect: str) -> None:
         if self._proc is None:
@@ -237,10 +278,16 @@ class LiveOverlay:
             return False
         self._proc = proc
         self._ready.clear()
+        self._stderr_tail = ""
         self._reader = threading.Thread(target=self._read, name="ihmouse-overlay", daemon=True)
         self._reader.start()
-        if not self._ready.wait(2.0):
-            self.failed = self.failed or "ihmouse overlay did not start. The system pointer still moves."
+        threading.Thread(target=self._drain_stderr, name="ihmouse-overlay-err", daemon=True).start()
+        if not self._ready.wait(5.0):
+            detail = self._stderr_tail.strip()
+            extra = f" {detail}" if detail else ""
+            self.failed = self.failed or (
+                "ihmouse overlay did not start." + extra + " The system pointer still moves."
+            )
             self._note_failure()
             self.close()
             return False
@@ -253,6 +300,9 @@ class LiveOverlay:
     def _popen(self) -> subprocess.Popen:
         env = os.environ.copy()
         env["PYTHONUNBUFFERED"] = "1"
+        # The parent may already have touched AppKit (accessibility, iheye).
+        # A forked child then aborts before the panel exists.
+        env.setdefault("OBJC_DISABLE_INITIALIZE_FORK_SAFETY", "YES")
         return subprocess.Popen(
             [sys.executable, "-m", "hfagent.desktop.overlay_main", "--parent", str(os.getpid())],
             stdin=subprocess.PIPE,
@@ -273,7 +323,9 @@ class LiveOverlay:
                 proc.stdin.write(encode_message(payload))
                 proc.stdin.flush()
         except Exception as exc:
-            self.failed = f"ihmouse overlay closed ({exc}). The system pointer still moves."
+            detail = self._stderr_tail.strip()
+            extra = f" {detail}" if detail else ""
+            self.failed = f"ihmouse overlay closed ({exc}).{extra} The system pointer still moves."
             self._arrived.set()
             self._suspend_ack.set()
             self._note_failure()
@@ -292,7 +344,9 @@ class LiveOverlay:
             if event == "ready":
                 self._ready.set()
             elif event == "failed":
-                self.failed = str(message.get("error") or "ihmouse overlay failed")
+                detail = self._stderr_tail.strip()
+                message_error = str(message.get("error") or "ihmouse overlay failed")
+                self.failed = f"{message_error} {detail}".strip() if detail else message_error
                 self._ready.set()
                 self._arrived.set()
             elif event == "arrived" and message.get("seq") == self._waiting:
@@ -300,10 +354,28 @@ class LiveOverlay:
             elif event == "suspended" and message.get("seq") == self._suspend_seq:
                 self._suspend_ack.set()
         if not self._ready.is_set():
-            self.failed = self.failed or "ihmouse overlay exited. The system pointer still moves."
+            detail = self._stderr_tail.strip()
+            extra = f" {detail}" if detail else ""
+            self.failed = self.failed or (
+                "ihmouse overlay exited." + extra + " The system pointer still moves."
+            )
             self._ready.set()
         self._arrived.set()
         self._suspend_ack.set()
+
+    def _drain_stderr(self) -> None:
+        proc = self._proc
+        if proc is None or proc.stderr is None:
+            return
+        chunks: list[str] = []
+        try:
+            for line in proc.stderr:
+                chunks.append(line)
+                if len(chunks) > 40:
+                    del chunks[:-40]
+                self._stderr_tail = "".join(chunks)[-800:]
+        except Exception:
+            return
 
     def _note_failure(self) -> None:
         if self._noted or not self.failed:
@@ -348,6 +420,49 @@ def rearm_overlay() -> None:
             client.failed = ""
             client._noted = False
             client._proc = None
+
+
+def arm_overlay() -> None:
+    """Show the arrow now. Tests with no injected client do not start a window."""
+    if not overlay_requested():
+        return
+    client = _client
+    if client is None:
+        if _testing():
+            return
+        client = get_overlay()
+    if type(client) is NullOverlay:
+        return
+    present = getattr(client, "present", None)
+    if present is None:
+        return
+    if isinstance(client, LiveOverlay):
+        x, y = _pointer_position()
+    else:
+        x, y = 120.0, 120.0
+    present(x, y)
+
+
+def _pointer_position() -> tuple[float, float]:
+    try:
+        from .pointer import PyAutoPointer
+
+        return PyAutoPointer().position()
+    except Exception:
+        return (120.0, 120.0)
+
+
+def restyle_overlay() -> None:
+    client = _client
+    if client is None:
+        return
+    restyle = getattr(client, "restyle", None)
+    if restyle is None:
+        return
+    try:
+        restyle()
+    except Exception:
+        return
 
 
 def hide_overlay() -> None:

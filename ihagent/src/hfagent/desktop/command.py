@@ -7,7 +7,15 @@ import sys
 
 from ..config import mask_secret, source_of
 from .hotkey import start_hotkey, stop_hotkey
-from .overlay_host import hide_overlay, overlay_problem, overlay_requested, rearm_overlay
+from .overlay_host import (
+    arm_overlay,
+    hide_overlay,
+    overlay_problem,
+    overlay_requested,
+    rearm_overlay,
+    restyle_overlay,
+)
+from .overlay_motion import clamp_overlay_scale, overlay_labels, overlay_scale
 from .session import get_session
 from .vision import current_chat, resolve_vision
 
@@ -49,7 +57,11 @@ def status_text() -> str:
     vision = settings.model or "(unset — text model cannot look)"
     host = settings.base_url or "(current host)"
     approval = session.approval_mode()
-    overlay = "on" if overlay_requested() else "off"
+    if overlay_requested():
+        label = "label on" if overlay_labels() else "label off"
+        overlay = f"on · {label} · scale {overlay_scale():.2g}"
+    else:
+        overlay = "off"
     line = (
         f"mouse on · overlay {overlay} · approval {approval} · stop {session.hotkey_spec()} "
         f"or a screen corner · vision {vision} @ {host}"
@@ -83,6 +95,8 @@ def config_report_lines() -> list[str]:
         f"mouse_approval={session.approval_mode()}  [{src('HFAGENT_MOUSE_APPROVAL', 'default')}]",
         f"mouse_stop_hotkey={session.hotkey_spec()}  [{src('HFAGENT_MOUSE_STOP_HOTKEY', 'default')}]",
         f"mouse_overlay={'on' if overlay_requested() else 'off'}  [{src('HFAGENT_MOUSE_OVERLAY', 'default')}]",
+        f"mouse_overlay_label={'on' if overlay_labels() else 'off'}  [{src('HFAGENT_MOUSE_OVERLAY_LABEL', 'default')}]",
+        f"mouse_overlay_scale={overlay_scale():.2g}  [{src('HFAGENT_MOUSE_OVERLAY_SCALE', 'default')}]",
         f"vision_model={settings.model or '(unset)'}  [{settings.model_source}]",
         f"vision_base_url={settings.base_url or '(current host)'}  [{settings.url_source}]",
         f"vision_api_key={key_shown}  [{settings.key_source}]",
@@ -97,6 +111,7 @@ def _turn_on() -> str:
     session.clear_stop()
     session.begin_task()
     rearm_overlay()
+    arm_overlay()
     note = start_hotkey(session.hotkey_spec())
     if note:
         return f"mouse on. {note}"
@@ -117,17 +132,59 @@ def _turn_off() -> str:
 
 def _overlay(rest: str) -> str:
     if rest in {"", "status"}:
-        return f"mouse overlay {'on' if overlay_requested() else 'off'}"
+        label = "label on" if overlay_labels() else "label off"
+        return (
+            f"mouse overlay {'on' if overlay_requested() else 'off'}"
+            f" · {label} · scale {overlay_scale():.2g}"
+        )
     if rest in {"on", "1", "true", "yes"}:
         os.environ["HFAGENT_MOUSE_OVERLAY"] = "1"
         _persist("HFAGENT_MOUSE_OVERLAY", "1")
-        return "mouse overlay on. The robot shows while mouse control is on."
+        if get_session().enabled() and not get_session().stopped:
+            rearm_overlay()
+            arm_overlay()
+        return "mouse overlay on. The arrow shows while mouse control is on."
     if rest in {"off", "0", "false", "no"}:
         os.environ["HFAGENT_MOUSE_OVERLAY"] = "0"
         _persist("HFAGENT_MOUSE_OVERLAY", "0")
         hide_overlay()
         return "mouse overlay off. The system pointer still moves when you confirm an action."
+    parts = rest.split()
+    if parts and parts[0] == "label":
+        return _overlay_label(" ".join(parts[1:]))
+    if parts and parts[0] == "scale":
+        return _overlay_scale(" ".join(parts[1:]))
     return USAGE
+
+
+def _overlay_label(rest: str) -> str:
+    if rest in {"on", "1", "true", "yes"}:
+        os.environ["HFAGENT_MOUSE_OVERLAY_LABEL"] = "1"
+        _persist("HFAGENT_MOUSE_OVERLAY_LABEL", "1")
+        restyle_overlay()
+        return "mouse overlay label on"
+    if rest in {"off", "0", "false", "no"}:
+        os.environ["HFAGENT_MOUSE_OVERLAY_LABEL"] = "0"
+        _persist("HFAGENT_MOUSE_OVERLAY_LABEL", "0")
+        restyle_overlay()
+        return "mouse overlay label off"
+    return "usage: /mouse overlay label on|off"
+
+
+def _overlay_scale(rest: str) -> str:
+    if not rest:
+        return "usage: /mouse overlay scale 0.6–2.5"
+    try:
+        value = float(rest.split()[0])
+    except ValueError:
+        return "usage: /mouse overlay scale 0.6–2.5"
+    if value != value or value < 0.6 or value > 2.5:
+        return "usage: /mouse overlay scale 0.6–2.5"
+    shown = f"{clamp_overlay_scale(value):.2f}".rstrip("0").rstrip(".")
+    os.environ["HFAGENT_MOUSE_OVERLAY_SCALE"] = shown
+    _persist("HFAGENT_MOUSE_OVERLAY_SCALE", shown)
+    restyle_overlay()
+    return f"mouse overlay scale {shown}"
 
 
 def _approval(rest: str) -> str:

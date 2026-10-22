@@ -44,6 +44,7 @@ _NUDGE_SNIPPETS = (
     "Continue the task with your tools",
     "Your previous response was empty",
     "do it yourself now with a tool call",
+    "Mouse control is now",
 )
 
 _CACHE: dict[str, tuple[int, int, dict]] = {}
