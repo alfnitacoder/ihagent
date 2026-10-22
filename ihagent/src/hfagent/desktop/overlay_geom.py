@@ -99,6 +99,29 @@ def label_box(bounds: Rect, text: str, virtual: Rect | None = None) -> Rect:
     return Rect(x, y, width, height)
 
 
+def monitor_views(monitors: list[Monitor]) -> list[Rect]:
+    """One overlay rect per display.
+
+    A single window stretched across every display mis-scales when one
+    screen is Retina and another is not: AppKit picks one backing scale
+    for the whole frame. Each display gets its own panel in that
+    display's points instead.
+    """
+    views: list[Rect] = []
+    for monitor in monitors:
+        if monitor.width <= 0 or monitor.height <= 0:
+            continue
+        views.append(Rect(monitor.x, monitor.y, monitor.width, monitor.height))
+    return views
+
+
+def _shift_points(item: dict, dx: float, dy: float) -> None:
+    raw = item.get("points")
+    if not raw:
+        return
+    item["points"] = [(float(px) + dx, float(py) + dy) for px, py in raw]
+
+
 def place_ops(ops: list[dict], virtual: Rect) -> list[dict]:
     """Shift pointer-space draw ops into the overlay view."""
     placed: list[dict] = []
@@ -110,5 +133,6 @@ def place_ops(ops: list[dict], virtual: Rect) -> list[dict]:
         for key in ("y", "cy", "y1", "y2"):
             if key in item:
                 item[key] = float(item[key]) - virtual.y
+        _shift_points(item, -virtual.x, -virtual.y)
         placed.append(item)
     return placed

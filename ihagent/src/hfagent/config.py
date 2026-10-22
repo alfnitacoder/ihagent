@@ -60,6 +60,8 @@ _ALIASES = {
     "hfagent_mouse_approval": "HFAGENT_MOUSE_APPROVAL",
     "hfagent_mouse_stop_hotkey": "HFAGENT_MOUSE_STOP_HOTKEY",
     "hfagent_mouse_overlay": "HFAGENT_MOUSE_OVERLAY",
+    "hfagent_mouse_overlay_label": "HFAGENT_MOUSE_OVERLAY_LABEL",
+    "hfagent_mouse_overlay_scale": "HFAGENT_MOUSE_OVERLAY_SCALE",
     "hfagent_vision_model": "HFAGENT_VISION_MODEL",
     "hfagent_vision_base_url": "HFAGENT_VISION_BASE_URL",
     "hfagent_vision_api_key": "HFAGENT_VISION_API_KEY",

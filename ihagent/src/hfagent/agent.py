@@ -465,12 +465,22 @@ def _shell_rules() -> str:
     )
 
 
+def _mouse_status() -> str:
+    """Live /mouse switch. Rebuilt on every system prompt, including a toggle."""
+    try:
+        from .desktop.prompt_state import standing_instructions
+
+        return "Mouse status: " + standing_instructions()
+    except Exception:
+        return "Mouse status: mouse control state is unavailable."
+
+
 def system_prompt(base_url: str = "") -> str:
     env = (
         f"Environment: {platform.system()} {platform.release()}, "
         f"cwd={Path.cwd()}"
     )
-    parts = [env, _shell_rules(), SYSTEM_PROMPT]
+    parts = [env, _shell_rules(), SYSTEM_PROMPT, _mouse_status()]
     google_note = _signed_in_google_note()
     if google_note:
         parts.append(google_note)
@@ -678,6 +688,22 @@ class Agent:
             {"role": "system", "content": system_prompt(self.config.base_url)}
         ]
         self.session_name = None
+
+    def note_mouse_state(self, text: str) -> None:
+        """Record a /mouse toggle and rebuild the system prompt from the live switch.
+
+        The slash command itself does not start a model turn. The note is what
+        the next turn reads, including a request the user already made.
+        """
+        note = str(text or "").strip()
+        if not note:
+            return
+        refreshed = {"role": "system", "content": system_prompt(self.config.base_url)}
+        if self.messages and self.messages[0].get("role") == "system":
+            self.messages[0] = refreshed
+        else:
+            self.messages.insert(0, refreshed)
+        self.messages.append({"role": "user", "content": note})
 
     # ------------------------------------------------------------------- loop
 

@@ -12,6 +12,7 @@ from hfagent.desktop.overlay_draw import BLACK, CYAN, WHITE, describe_scene
 from hfagent.desktop.overlay_geom import (
     appkit_window_frame,
     label_box,
+    monitor_views,
     monitors_from_appkit_frames,
     place_ops,
     pointer_to_view,
@@ -36,11 +37,13 @@ from hfagent.desktop.overlay_motion import (
     OverlayShow,
     effect_for,
     make_cue,
+    overlay_scale,
 )
 from hfagent.desktop.overlay_window import (
     apply_appkit_panel,
     apply_qt_overlay,
     backend_note,
+    choose_overlay_level,
     windows_clickthrough_exstyle,
     windows_exclude_capture,
     WS_EX_LAYERED,
@@ -511,6 +514,8 @@ def test_slash_overlay_persists_and_hides(monkeypatch, tmp_path):
 
 
 def test_importing_the_overlay_does_not_open_a_toolkit():
+    import inspect
+
     import hfagent.desktop.overlay_draw
     import hfagent.desktop.overlay_main
     import hfagent.desktop.overlay_motion
@@ -519,3 +524,92 @@ def test_importing_the_overlay_does_not_open_a_toolkit():
     assert "AppKit" not in sys.modules
     assert "PySide6" not in sys.modules
     assert "pyautogui" not in sys.modules
+    source = inspect.getsource(hfagent.desktop.overlay_main.run_appkit)
+    assert source.index("sharedApplication") < source.index("start_reader")
+    assert source.index("start_reader") < source.index("runEventLoop")
+    assert "setNeedsDisplay_" in source
+    assert "setWantsLayer_" in source
+    assert "isOpaque" in source
+    assert "choose_overlay_level" in source
+    steps = hfagent.desktop.overlay_main.APPKIT_STARTUP_STEPS
+    assert steps.index("stdin_thread") > steps.index("shared_application")
+    assert steps.index("panels_per_screen") > steps.index("shared_application")
+
+
+def test_overlay_level_prefers_assistive_over_floating():
+    assert choose_overlay_level(floating=3, status=25, assistive=1500) == 1500
+    assert choose_overlay_level(floating=3, status=25, assistive=None) == 25
+    assert choose_overlay_level(floating=3, status=25, assistive=0) == 25
+    assert choose_overlay_level(floating=3, status=3, assistive=None) == 3
+
+
+def test_each_display_gets_its_own_view_including_retina():
+    views = monitor_views(
+        [Monitor(0, 0, 1440, 900, 2.0), Monitor(-1920, 0, 1920, 1080, 1.0)]
+    )
+    assert views == [Rect(0, 0, 1440, 900), Rect(-1920, 0, 1920, 1080)]
+    arrow = {"op": "polygon", "points": [(10.0, 20.0), (0.0, 0.0), (4.0, 8.0)], "part": "arrow"}
+    placed = place_ops([arrow], views[1])
+    assert placed[0]["points"][0] == (1930.0, 20.0)
+
+
+def test_arrow_is_distinct_and_clicks_do_not_share_one_ripple():
+    motion = CursorMotion(reduce_motion=True)
+    motion.propose(make_cue("click", 140, 220, "Save", Rect(100, 200, 80, 40)), origin=(0, 0))
+    ops = describe_scene(motion.frame())
+    arrow = next(op for op in ops if op["part"] == "arrow")
+    assert arrow["op"] == "polygon"
+    assert arrow["fill"][:3] == WHITE[:3]
+    assert arrow["stroke"][:3] == CYAN[:3]
+    assert any(op.get("text") == "IH" for op in ops)
+    assert effect_for("right_click") == "right"
+    assert effect_for("double_click") == "double"
+    assert effect_for("click") == "pulse"
+    motion.act("right")
+    motion.tick(0.05)
+    assert any(op["part"] == "right" for op in describe_scene(motion.frame()))
+    motion.act("double")
+    motion.tick(0.2)
+    doubles = [op for op in describe_scene(motion.frame()) if op["part"] == "double"]
+    assert len(doubles) >= 2
+    motion.show_label = False
+    assert not any(op.get("text") == "Click: Save" for op in describe_scene(motion.frame()))
+    assert any(op.get("text") == "IH" for op in describe_scene(motion.frame()))
+
+
+def test_glide_leaves_a_trail_and_sticky_does_not_fade():
+    motion = CursorMotion(reduce_motion=False)
+    motion.propose(make_cue("move", 400, 0, "Go"), origin=(0, 0))
+    for _ in range(6):
+        motion.tick(motion.glide_duration / 6.0)
+    assert len(motion.frame().trail) >= 2
+    assert any(op["part"] == "trail" for op in describe_scene(motion.frame()))
+    motion.sticky = True
+    motion.release()
+    motion.tick(IDLE_SECONDS + FADE_SECONDS + 1)
+    assert motion.frame().visible is True
+    assert motion.frame().opacity == 1
+
+
+def test_mouse_on_presents_the_arrow_and_scale_is_clamped(monkeypatch, tmp_path):
+    env_path = tmp_path / ".env"
+    monkeypatch.setattr("hfagent.config.user_env_path", lambda: env_path)
+    from hfagent.desktop.command import handle_command
+
+    overlay = RecordingOverlay()
+    set_overlay(overlay)
+    assert handle_command("on").startswith("mouse on")
+    assert overlay.events[0][0] == "present"
+    assert handle_command("overlay scale 1.4") == "mouse overlay scale 1.4"
+    assert "HFAGENT_MOUSE_OVERLAY_SCALE=1.4" in env_path.read_text(encoding="utf-8")
+    assert overlay.events[-1][0] == "restyle"
+    assert handle_command("overlay label off") == "mouse overlay label off"
+    assert handle_command("overlay scale 9") == "usage: /mouse overlay scale 0.6–2.5"
+    assert overlay_scale() == 1.4
+    motion = CursorMotion(reduce_motion=True)
+    motion.scale = 2
+    motion.propose(make_cue("show", 10, 10), origin=(10, 10))
+    ops = describe_scene(motion.frame())
+    badge = next(op for op in ops if op["part"] == "body")
+    assert abs(badge["cx"] - (10 + 38 * 2)) < 0.01
+    assert not any(op["part"] == "highlight" for op in ops)

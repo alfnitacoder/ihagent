@@ -86,6 +86,23 @@ def apply_qt_overlay(widget, Qt) -> None:
         widget.setAttribute(extra, True)
 
 
+def choose_overlay_level(*, floating: int, status: int, assistive: int | None = None) -> int:
+    """Pick a window level a background agent can actually show.
+
+    ``NSFloatingWindowLevel`` matches the iheye bubble, but a desktop-sized
+    transparent panel at that level sits with ordinary palettes. On recent
+    macOS an accessory Python process's floating panel is often never
+    composited over the active app. Assistive-tech high is the level Apple
+    defines for this kind of overlay. Status level is the fallback. A
+    non-positive assistive value is ignored.
+    """
+    if assistive is not None and int(assistive) > int(status) and int(assistive) > int(floating):
+        return int(assistive)
+    if int(status) > int(floating):
+        return int(status)
+    return int(floating)
+
+
 def apply_appkit_panel(panel, *, clear_color, floating_level, sharing_none, behavior) -> None:
     """Borderless floating panel. Clicks pass through. Screenshots skip it."""
     panel.setLevel_(floating_level)

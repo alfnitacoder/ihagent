@@ -630,7 +630,128 @@ def test_prompt_tells_the_model_to_wait_for_mouse_on():
     assert "/mouse on" in SYSTEM_PROMPT
     assert "password" in SYSTEM_PROMPT
     assert "mouse_elements" in SYSTEM_PROMPT
+    assert "open -a Safari" in SYSTEM_PROMPT
+    assert "xdg-open" in SYSTEM_PROMPT
+    assert 'start ""' in SYSTEM_PROMPT
+    assert "They do nothing until" not in SYSTEM_PROMPT
+    assert "ihmouse" in SYSTEM_PROMPT
     assert "qwen2.5vl" in vision_setup_message("gpt-oss:120b")
+
+
+def test_system_prompt_reads_the_live_mouse_switch(monkeypatch):
+    from hfagent.agent import system_prompt
+
+    off = system_prompt("http://127.0.0.1:9/v1")
+    assert "Mouse status:" in off
+    assert "Mouse control is OFF" in off
+    assert "Ask the user to run /mouse on" in off
+    assert "open -a Safari https://mail.google.com" in off
+    monkeypatch.setenv("HFAGENT_MOUSE", "1")
+    on = system_prompt("http://127.0.0.1:9/v1")
+    assert "Mouse control is ON" in on
+    assert "call the mouse_* tools now" in on
+    assert "Do not ask them to run /mouse on" in on
+    get_session().trip("user /mouse stop")
+    stopped = system_prompt("http://127.0.0.1:9/v1")
+    assert "Mouse control is STOPPED" in stopped
+    assert "Do not call mouse tools" in stopped
+
+
+def test_mouse_toggle_updates_the_model_context(monkeypatch, tmp_path):
+    env_path = tmp_path / ".env"
+    monkeypatch.setattr("hfagent.config.user_env_path", lambda: env_path)
+    from hfagent.commands import dispatch_slash
+    from hfagent.sessions import derive_title
+    from hfagent.ui.tui import is_internal_nudge
+
+    class UI(AgentUI):
+        def on_status(self, text):
+            return None
+
+    agent = Agent(Config(), default_registry(), UI())
+    assert "Mouse control is OFF" in agent.messages[0]["content"]
+    before = len(agent.messages)
+
+    assert dispatch_slash(agent, UI(), "/mouse on") == "handled"
+    system = agent.messages[0]["content"]
+    assert "Mouse control is ON" in system
+    assert "call the mouse_* tools now" in system
+    assert "Do not ask them to run /mouse on" in system
+    note = agent.messages[-1]["content"]
+    assert note.startswith("Mouse control is now ON")
+    assert "call the tools on your next turn" in note
+    assert "Mouse control is ON" in note
+    assert is_internal_nudge(note)
+    assert derive_title(agent.messages) == "untitled"
+    assert len(agent.messages) == before + 1
+
+    assert dispatch_slash(agent, UI(), "/mouse") == "handled"
+    assert dispatch_slash(agent, UI(), "/mouse log") == "handled"
+    assert dispatch_slash(agent, UI(), "/mouse approval per-task") == "handled"
+    assert len(agent.messages) == before + 1
+
+    assert dispatch_slash(agent, UI(), "/mouse overlay off") == "handled"
+    assert "hiding the ihmouse overlay" in agent.messages[-1]["content"]
+    assert "ihmouse overlay is off" in agent.messages[0]["content"]
+    assert "Mouse control is ON" in agent.messages[0]["content"]
+
+    assert dispatch_slash(agent, UI(), "/mouse overlay on") == "handled"
+    assert agent.messages[-1]["content"].startswith("Mouse control is now showing")
+    assert "ihmouse overlay is on" in agent.messages[0]["content"]
+
+    assert dispatch_slash(agent, UI(), "/mouse stop") == "handled"
+    assert agent.messages[-1]["content"].startswith("Mouse control is now stopped")
+    assert "Mouse control is STOPPED" in agent.messages[0]["content"]
+    assert is_internal_nudge(agent.messages[-1]["content"])
+
+    assert dispatch_slash(agent, UI(), "/mouse off") == "handled"
+    assert agent.messages[-1]["content"].startswith("Mouse control is now OFF")
+    assert "Mouse control is OFF" in agent.messages[0]["content"]
+    assert "Ask the user to run /mouse on" in agent.messages[0]["content"]
+    assert derive_title(
+        agent.messages + [{"role": "user", "content": "open Gmail in Safari"}]
+    ) == "open Gmail in Safari"
+
+
+def test_mouse_tool_descriptions_follow_the_switch(monkeypatch):
+    click = default_registry().get("mouse_click")
+    off = click.spec()["function"]["description"]
+    assert off.startswith("Mouse control is OFF.")
+    assert "Ask the user to run /mouse on" in off
+    assert "Requires /mouse on" not in off
+    assert "Does nothing" not in off
+    assert "Click the focused app" in off
+
+    _enable(monkeypatch)
+    turned_on = click.spec()["function"]["description"]
+    assert turned_on.startswith("Mouse control is ON.")
+    assert "Call this tool when the user asked" in turned_on
+    assert "Do not tell the user to run /mouse on" in turned_on
+
+    get_session().trip("emergency stop")
+    stopped = click.spec()["function"]["description"]
+    assert stopped.startswith("Mouse control is STOPPED.")
+    assert "Ask the user to run /mouse on" in stopped
+
+
+def test_off_tool_tells_the_model_to_ask_for_mouse_on():
+    pointer = Pointer()
+    control, calls = _controller(pointer, lambda: _snapshot())
+    result = control.perform("click", element=1)
+    assert "Ask the user to run /mouse on" in result
+    assert "mouse control is off" in result
+    assert "then call this tool again" in result
+    assert pointer.clicks == []
+    assert calls["grab"] == 0
+
+
+def test_new_session_sees_mouse_already_on(monkeypatch):
+    monkeypatch.setenv("HFAGENT_MOUSE", "1")
+    agent = Agent(Config(), default_registry(), AgentUI())
+    assert "Mouse control is ON" in agent.messages[0]["content"]
+    spec = agent.registry.get("mouse_type").spec()["function"]["description"]
+    assert spec.startswith("Mouse control is ON.")
+    assert "Do not tell the user to run /mouse on" in spec
 
 
 def test_normalize_keys_maps_command_to_ctrl_off_macos():
