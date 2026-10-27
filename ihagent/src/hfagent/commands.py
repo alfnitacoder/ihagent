@@ -31,8 +31,10 @@ from .sessions import (
     delete_session,
     format_session_listing,
     list_sessions,
+    message_count,
     open_session,
     rename_session,
+    save_session,
     session_exists,
     toggle_session_flag,
 )
@@ -71,6 +73,7 @@ HELP = """\
 /archive [name]   archive or restore a session ('last' if no name)
 /delete [name]    delete a saved session ('last' if no name, or 'all')
 /resume [name]    load a saved session ('last' if no name given)
+/new              start a new conversation (this one stays in /sessions)
 /clear            reset the conversation (the next turn starts a new session)
 /exit, /quit      leave the agent
 
@@ -94,6 +97,23 @@ def _rename_target(arg: str, active: str | None) -> tuple[str, str] | None:
     if active:
         return active, text
     return None
+
+
+def _flush_open_session(agent: Agent) -> None:
+    """Write the open chat before ``/new`` starts another one.
+
+    A finished turn is already on disk, and ``/clear`` leaves that file in
+    place when it resets. ``/new`` also writes messages that never reached an
+    autosave, so the conversation still shows up in ``/sessions``.
+    """
+    if message_count(agent.messages) == 0:
+        return
+    path = save_session(
+        agent.messages,
+        agent.config.model,
+        name=agent.session_name,
+    )
+    agent.session_name = path.stem
 
 
 def pasted_api_key(line: str) -> tuple[bool, str]:
@@ -194,6 +214,12 @@ def dispatch_slash(agent: Agent, ui: AgentUI, line: str) -> SlashResult:
         if note:
             agent.note_mouse_state(note)
         return "handled"
+
+    if command == "/new":
+        _flush_open_session(agent)
+        agent.reset()
+        ui.on_status("new conversation")
+        return "clear"
 
     if command == "/clear":
         agent.reset()

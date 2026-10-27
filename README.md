@@ -925,7 +925,7 @@ Skills are `SKILL.md` recipes injected into the system prompt. Project overrides
 
 The `remember` tool appends to `~/.hfagent/memory/memory.md` (or `$HFAGENT_MEMORY_PATH/memory.md`). That file is injected into new sessions, except on Anthropic, where it is left out of the system prompt. `/memory` shows it and `/forget` deletes it. The tool description tells the model not to store secrets or passwords. Entries longer than 6000 characters keep the newest tail.
 
-A conversation is one file under `~/.hfagent/sessions/<project>/`. The first turn creates `YYYYMMDD-HHMMSS.json`; later turns update that file. `/clear` and `ctrl+l` end it, and the next message starts a new file. Older builds wrote a new file every turn. Those files still open.
+A conversation is one file under `~/.hfagent/sessions/<project>/`. The first turn creates `YYYYMMDD-HHMMSS.json`; later turns update that file. `/new`, `/clear`, and `ctrl+l` end it, and the next message starts a new file. The file already written stays in `/sessions`. `/new` also writes the open conversation first when the latest messages have not been saved yet. Older builds wrote a new file every turn. Those files still open.
 
 The sidebar titles each session from its first user message, trimmed to about 40 characters. `/rename` (or `r` on the highlighted row) stores a custom title on the file and keeps it across later saves. The same title is not repeated on every line: the first copy shows the title and a `×N` count, and the others show only the time, message count, and model.
 
@@ -994,7 +994,8 @@ A dedicated Hugging Face GPU endpoint is a different host. `scripts/setup-huggin
 | `/archive [name]` | Archive or restore a session (`last` if omitted). |
 | `/resume [name]` | Load a session (`last` if omitted). |
 | `/delete [name\|all]` | Delete one session (`last` if omitted) or all of them. |
-| `/clear` | Reset the conversation. The next turn starts a new session file. |
+| `/new` | Start a new conversation. The current one is saved and stays in `/sessions`. The next turn starts a new session file. |
+| `/clear` | Reset the conversation. The next turn starts a new session file. The session file already written stays in `/sessions`. |
 | `/exit`, `/quit` | Leave. |
 
 ## Troubleshooting
