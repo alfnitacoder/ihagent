@@ -3,7 +3,8 @@
 Files stay ``YYYYMMDD-HHMMSS.json``. Extra keys (``title``, ``title_custom``,
 ``pinned``, ``archived``) are optional, so sessions written by older versions
 still load. A conversation keeps updating one file once its name is known;
-``/clear`` starts a new file.
+``/clear`` and ``/new`` start a new file. ``/new`` writes the open
+conversation first when it has not been saved yet.
 """
 
 from __future__ import annotations

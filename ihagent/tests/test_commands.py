@@ -54,6 +54,72 @@ def test_clear_and_unknown():
     assert "unknown command" in ui.system[-1]
 
 
+def test_new_is_listed_in_help():
+    agent = _agent()
+    ui = Recorder()
+    assert "/new" in HELP
+    assert dispatch_slash(agent, ui, "/help") == "handled"
+    assert "/new" in ui.system[-1]
+
+
+def test_new_saves_unsaved_chat_then_starts_fresh(monkeypatch, tmp_path):
+    from hfagent.sessions import list_sessions
+
+    monkeypatch.setattr("hfagent.sessions.SESSIONS_ROOT", tmp_path)
+    agent = _agent()
+    ui = Recorder()
+    agent.messages.append({"role": "user", "content": "plan the portal"})
+    agent.messages.append({"role": "assistant", "content": "ok"})
+    assert agent.session_name is None
+
+    assert dispatch_slash(agent, ui, "/new") == "clear"
+    assert ui.status[-1] == "new conversation"
+    assert agent.session_name is None
+    assert agent.messages[0]["role"] == "system"
+    assert [m for m in agent.messages if m["role"] != "system"] == []
+
+    saved = list_sessions()
+    assert len(saved) == 1
+    assert saved[0]["title"] == "plan the portal"
+    assert dispatch_slash(agent, ui, "/sessions") == "handled"
+    assert "plan the portal" in ui.system[-1]
+
+
+def test_new_keeps_one_copy_of_an_already_saved_session(monkeypatch, tmp_path):
+    from hfagent.sessions import list_sessions, save_session
+
+    monkeypatch.setattr("hfagent.sessions.SESSIONS_ROOT", tmp_path)
+    agent = _agent()
+    ui = Recorder()
+    agent.messages = [
+        {"role": "system", "content": "sys"},
+        {"role": "user", "content": "plan the portal"},
+        {"role": "assistant", "content": "done"},
+    ]
+    path = save_session(agent.messages, agent.config.model)
+    agent.session_name = path.stem
+
+    assert dispatch_slash(agent, ui, "/new") == "clear"
+    assert agent.session_name is None
+    saved = list_sessions()
+    assert [record["name"] for record in saved] == [path.stem]
+    assert path.is_file()
+    assert dispatch_slash(agent, ui, "/sessions") == "handled"
+    assert "plan the portal" in ui.system[-1]
+
+
+def test_new_on_empty_conversation_does_not_write_a_session(monkeypatch, tmp_path):
+    from hfagent.sessions import list_sessions
+
+    monkeypatch.setattr("hfagent.sessions.SESSIONS_ROOT", tmp_path)
+    agent = _agent()
+    ui = Recorder()
+    assert dispatch_slash(agent, ui, "/new") == "clear"
+    assert list_sessions() == []
+    assert dispatch_slash(agent, ui, "/sessions") == "handled"
+    assert "no saved sessions" in ui.system[-1]
+
+
 def test_model_api_saves_key_without_echoing(monkeypatch, tmp_path):
     path = tmp_path / ".env"
     path.write_text(
