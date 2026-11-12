@@ -150,7 +150,17 @@ def make_agent(
             "  (create one at https://ollama.com/settings/keys)"
         )
     ui = ui or ConsoleUI()
-    return Agent(config, default_registry(), ui), ui
+    agent = Agent(config, default_registry(), ui)
+    agent.launch_overrides = {
+        "model": args.model,
+        "base_url": args.base_url,
+        "max_steps": args.max_steps,
+        "temperature": args.temperature,
+        "local": args.local,
+        "ollama": args.ollama,
+        "approval": "auto" if args.yolo else args.approval,
+    }
+    return agent, ui
 
 
 def repl(agent: Agent, ui: ConsoleUI) -> None:

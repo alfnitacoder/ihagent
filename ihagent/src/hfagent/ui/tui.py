@@ -1374,7 +1374,7 @@ class HfAgentApp(App):
         parts = text.split(maxsplit=1)
         command = parts[0].lower()
         arg = parts[1] if len(parts) > 1 else ""
-        if command in ("/cloud", "/local", "/host"):
+        if command in ("/cloud", "/local", "/host", "/reload"):
             self._device = "…"
             self.run_worker(self._probe_device, thread=True, exclusive=False)
         if command == "/search":
