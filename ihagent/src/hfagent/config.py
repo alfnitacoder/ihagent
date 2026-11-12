@@ -3,11 +3,14 @@
 Precedence, highest first:
 
 1. Command-line flags (this invocation).
-2. Process environment — variables exported in the shell. A value that is
-   only there because the shell sourced ``~/.hfagent/hf.env`` does not count;
-   it is attributed to that file and loses to the files below.
+2. Process environment — variables exported in the shell before this process
+   wrote them. A value that is only there because the shell sourced
+   ``~/.hfagent/hf.env`` does not count; it is attributed to that file and
+   loses to the files below. A later edit to that file still counts as the
+   file, not as a new shell export.
 3. Project ``.env`` (``./.env``, or ``../.env`` when the current directory
-   has none).
+   has none). Starting in the home directory makes ``~/.env`` this file,
+   so it beats ``~/.hfagent/.env``.
 4. User file ``~/.hfagent/.env``.
 5. User file ``~/.hfagent/hf.env`` (also read directly, so it applies even
    when the shell did not source it).
@@ -15,6 +18,11 @@ Precedence, highest first:
 
 ``HFAGENT_API_KEY``, when set, is the key for every base URL and beats the
 provider-specific variables.
+
+``/reload`` applies this stack again. Values this process wrote — the load
+itself, plus ``/url``, ``/model_api``, ``/cloud``, ``/local``, and
+``/claude`` — are taken back out first, so an edit to a file is visible.
+A shell export from before those writes still wins, the same as a new process.
 """
 
 from __future__ import annotations
@@ -70,12 +78,21 @@ _ALIASES = {
 # key -> (value in the process before we wrote it, value we wrote)
 _INJECTED: dict[str, tuple[str | None, str]] = {}
 _LAYER_SOURCES: dict[str, str] = {}
+# First value seen for a key, before this process wrote it. None means unset.
+_ORIGINAL: dict[str, str | None] = {}
+# Process values that matched ~/.hfagent/hf.env on the first read.
+_HFENV_ECHO: dict[str, str] = {}
+_HFENV_ECHO_READY = False
 
 
 def _reset_env_layer_state() -> None:
     """Undo values this process wrote from env files. Used by tests."""
+    global _HFENV_ECHO_READY
     _undo_injected()
     _LAYER_SOURCES.clear()
+    _ORIGINAL.clear()
+    _HFENV_ECHO.clear()
+    _HFENV_ECHO_READY = False
 
 
 def _undo_injected() -> None:
@@ -90,11 +107,26 @@ def _undo_injected() -> None:
 
 
 def _inject(key: str, value: str) -> None:
-    prev = os.environ.get(key)
-    if prev == value:
+    """Copy a file value into the process, remembering the shell's value."""
+    if key not in _ORIGINAL:
+        _ORIGINAL[key] = os.environ.get(key)
+    if os.environ.get(key) != value:
+        os.environ[key] = value
+    _INJECTED[key] = (_ORIGINAL[key], value)
+
+
+def set_runtime_env(key: str, value: str) -> None:
+    """Set a variable this process owns.
+
+    ``/reload`` drops it and reads the files again. A value exported in the
+    shell before the first write still counts as process environment.
+    """
+    if not key:
         return
+    if key not in _ORIGINAL:
+        _ORIGINAL[key] = os.environ.get(key)
     os.environ[key] = value
-    _INJECTED[key] = (prev, value)
+    _INJECTED[key] = (_ORIGINAL[key], value)
 
 
 def _parse_env_file(path: Path) -> dict[str, str]:
@@ -125,15 +157,22 @@ def resolve_from_layers(
     project: dict[str, str],
     user: dict[str, str],
     hfenv: dict[str, str],
+    hfenv_echo: dict[str, str] | None = None,
 ) -> tuple[str | None, str]:
     """Pick a value and name the source that won.
 
     A process value that exactly matches ``~/.hfagent/hf.env`` is treated as
     that file (the shell sourced it), so project and user env files override it.
+    ``hfenv_echo`` is that match from the first read. After the file changes,
+    the stale copy is still the file, not a shell export that hides the edit.
     """
     proc = process.get(name)
     hf_value = hfenv.get(name)
-    sourced_hfenv = proc is not None and hf_value is not None and proc == hf_value
+    echo = None if hfenv_echo is None else hfenv_echo.get(name)
+    sourced_hfenv = proc is not None and (
+        (hf_value is not None and proc == hf_value)
+        or (echo is not None and proc == echo)
+    )
     if proc is not None and not sourced_hfenv:
         return proc, "process environment"
     if name in project:
@@ -147,6 +186,21 @@ def resolve_from_layers(
     return None, "default"
 
 
+def _note_hfenv_echoes(process: dict[str, str], hfenv: dict[str, str]) -> None:
+    """Remember shell values that were copies of ``~/.hfagent/hf.env``.
+
+    Only the first read is recorded. A later edit that happens to equal the
+    shell does not turn a real export into a sourced file.
+    """
+    global _HFENV_ECHO_READY
+    if _HFENV_ECHO_READY:
+        return
+    for key, value in hfenv.items():
+        if process.get(key) == value:
+            _HFENV_ECHO[key] = value
+    _HFENV_ECHO_READY = True
+
+
 def apply_layered_env() -> dict[str, str]:
     """Apply the precedence above to os.environ. Returns key → source."""
     global _LAYER_SOURCES
@@ -155,9 +209,12 @@ def apply_layered_env() -> dict[str, str]:
     project = _parse_env_file(project_env_path())
     user = _parse_env_file(user_env_path())
     hfenv = _parse_env_file(hf_env_path())
+    _note_hfenv_echoes(process, hfenv)
     sources: dict[str, str] = {}
     for key in set(project) | set(user) | set(hfenv):
-        value, source = resolve_from_layers(key, process, project, user, hfenv)
+        value, source = resolve_from_layers(
+            key, process, project, user, hfenv, hfenv_echo=_HFENV_ECHO
+        )
         sources[key] = source
         if value is None or source == "process environment":
             continue
@@ -228,7 +285,11 @@ def _api_key_for(base_url: str) -> str:
 
 
 def project_env_path() -> Path:
-    """The project .env IHAgent is using, or ``./.env`` if none exists yet."""
+    """The project .env IHAgent is using, or ``./.env`` if none exists yet.
+
+    Launched from the home directory, ``~/.env`` is this file and outranks
+    ``~/.hfagent/.env``.
+    """
     cwd = Path.cwd() / ".env"
     if cwd.is_file():
         return cwd
@@ -692,7 +753,7 @@ def format_config_report(config: "Config") -> str:
         "  command line > process environment > project .env > "
         "~/.hfagent/.env > ~/.hfagent/hf.env > default",
         "A process value copied from sourcing ~/.hfagent/hf.env is treated as "
-        "that file, so it does not hide a newer project or user env file.",
+        "that file, so it does not hide a newer project, user, or hf.env file.",
         "",
     ]
     for name, value, secret in rows:

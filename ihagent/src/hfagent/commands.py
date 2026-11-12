@@ -9,6 +9,7 @@ from .config import (
     ANTHROPIC_BASE_URL,
     ANTHROPIC_DEFAULT_MODEL,
     OLLAMA_BASE_URL,
+    Config,
     api_key_info,
     env_file_has_key,
     env_name_for_api_key,
@@ -25,6 +26,7 @@ from .config import (
     save_host_model,
     save_selected_model,
     save_user_setting,
+    set_runtime_env,
 )
 from .memory import clear_memory, load_memory
 from .sessions import (
@@ -58,6 +60,7 @@ HELP = """\
 /url <base_url>   test a host (GET /v1/models) and switch to it
 /primary          switch back from the fallback host
 /config           show effective settings and where each came from
+/reload           re-read env files into this session (keeps the conversation)
 /audit [path]     read-only repo health check (also: ihagent --audit)
 /test [scaffold] [path]  detect and run tests, or a smoke check
 /output           show the last full command or browser output
@@ -76,6 +79,8 @@ HELP = """\
 /new              start a new conversation (this one stays in /sessions)
 /clear            reset the conversation (the next turn starts a new session)
 /exit, /quit      leave the agent
+
+/reload keeps this conversation. Precedence matches startup: command-line flags, then a shell export from before launch, then project .env (~/.env when you started in your home directory), ~/.hfagent/.env, ~/.hfagent/hf.env. Edits on disk show up even after /url, /model_api, /cloud, /local, or /claude copied the old value into the environment. /approval and a fallback host are only in this session, so /reload replaces them.
 
 TUI keys: /cloud or /local · f2 model · f3 sessions · drag to copy · ctrl+shift+c copy · ctrl+b sidebar · ctrl+l clear · ctrl+q quit · up/down history
 In the session list: enter resume · / search · r rename · p pin · a archive · x delete · esc back
@@ -320,6 +325,10 @@ def dispatch_slash(agent: Agent, ui: AgentUI, line: str) -> SlashResult:
         ui.on_system(format_config_report(agent.config))
         return "handled"
 
+    if command == "/reload":
+        _reload_settings(agent, ui)
+        return "handled"
+
     if command == "/audit":
         from .assist.audit import audit
 
@@ -410,7 +419,7 @@ def _switch_host(agent: Agent, ui: AgentUI, kind: str) -> None:
 
     current = host_label(agent.config.base_url)
     if current in ("cloud", "local") and agent.config.model:
-        os.environ[host_model_env(current)] = agent.config.model
+        set_runtime_env(host_model_env(current), agent.config.model)
         save_host_model(current, agent.config.model)
 
     base = CLOUD_BASE_URL if kind == "cloud" else OLLAMA_BASE_URL
@@ -426,8 +435,8 @@ def _switch_host(agent: Agent, ui: AgentUI, kind: str) -> None:
         else:
             model = agent.config.model
     agent.retarget(base_url=base, api_key=key, model=model, api_key_var=key_var or None)
-    os.environ["HF_BASE_URL"] = base
-    os.environ["HFAGENT_MODEL"] = model
+    set_runtime_env("HF_BASE_URL", base)
+    set_runtime_env("HFAGENT_MODEL", model)
     save_base_url(base)
     save_selected_model(model)
     agent.config.sources["base_url"] = "project .env"
@@ -450,8 +459,8 @@ def _switch_to_anthropic(agent: Agent, ui: AgentUI) -> None:
     if "claude" not in model.lower():
         model = ANTHROPIC_DEFAULT_MODEL
     agent.retarget(base_url=base, api_key=key, model=model, api_key_var=key_var)
-    os.environ["HF_BASE_URL"] = base
-    os.environ["HFAGENT_MODEL"] = model
+    set_runtime_env("HF_BASE_URL", base)
+    set_runtime_env("HFAGENT_MODEL", model)
     save_base_url(base)
     save_selected_model(model)
     if not key:
@@ -462,8 +471,6 @@ def _switch_to_anthropic(agent: Agent, ui: AgentUI) -> None:
 
 def _switch_url(agent: Agent, ui: AgentUI, raw: str) -> None:
     """GET /v1/models, then point the live session at the URL and save it."""
-    import os
-
     try:
         base = normalize_base_url(raw)
     except ValueError as exc:
@@ -484,7 +491,7 @@ def _switch_url(agent: Agent, ui: AgentUI, raw: str) -> None:
     ui.on_system(f"{detail}\n{listed}")
     agent.retarget(base_url=base, api_key=key, model=current, api_key_var=key_var)
     agent.on_fallback = False
-    os.environ["HF_BASE_URL"] = base
+    set_runtime_env("HF_BASE_URL", base)
     saved = _persist_base_url(base)
     where = ", ".join(saved)
     # The user file is always written. If the project file was updated too,
@@ -535,15 +542,69 @@ def _switch_to_primary(agent: Agent, ui: AgentUI) -> None:
 
 
 def _apply_pasted_key(agent: Agent, ui: AgentUI, key: str) -> None:
-    import os
-
     if not key or any(ch.isspace() for ch in key) or len(key) < 8:
         ui.on_status("paste the key as /model_api=...")
         return
     var = env_name_for_api_key(agent.config.base_url)
-    os.environ[var] = key
+    set_runtime_env(var, key)
     agent.config.api_key = key
     agent.config.api_key_var = var
     agent.client.api_key = key
     save_api_key(key, agent.config.base_url)
     ui.on_status("api key saved")
+
+
+def _reload_settings(agent: Agent, ui: AgentUI) -> None:
+    """Re-read env files and point the live client at the result.
+
+    The conversation and session stay. Command-line flags from this launch
+    still win, the same as starting the process again.
+    """
+    overrides = dict(getattr(agent, "launch_overrides", None) or {})
+    try:
+        loaded = Config.load(**overrides)
+    except ValueError as exc:
+        ui.on_error(str(exc))
+        return
+    agent.config = loaded
+    agent.retarget(
+        base_url=loaded.base_url,
+        api_key=loaded.api_key,
+        model=loaded.model,
+        api_key_var=loaded.api_key_var or None,
+    )
+    agent.on_fallback = False
+    agent.primary_target = None
+    summary = _reload_summary(loaded)
+    missing = _missing_host_key(loaded.base_url)
+    ui.on_system(summary if not missing else f"{summary}\n{missing}")
+    ui.on_status(missing or f"reloaded · {host_label(loaded.base_url)} · {loaded.model}")
+
+
+def _reload_summary(config: Config) -> str:
+    """One line: host, model, and the source that won. No secret values."""
+    base_src = config.sources.get("base_url", "default")
+    model_src = config.sources.get("model", "default")
+    parts = [
+        f"reloaded · host: {host_label(config.base_url)} · {config.base_url} [{base_src}]",
+        f"model: {config.model} [{model_src}]",
+    ]
+    if config.api_key:
+        var = config.api_key_var or "api_key"
+        parts.append(f"{var} [{config.sources.get('api_key', 'default')}]")
+    else:
+        parts.append("api key (unset)")
+    return " · ".join(parts)
+
+
+def _missing_host_key(base_url: str) -> str | None:
+    """Same warning the host switches print when the new host has no key."""
+    if api_key_info(base_url)[0]:
+        return None
+    if any(token in base_url for token in ("11434", "127.0.0.1", "localhost")):
+        return None
+    if "api.anthropic.com" in base_url:
+        return "host: claude — paste your Anthropic key as /model_api=..."
+    if "ollama.com" in base_url:
+        return "host: cloud — paste your key as /model_api=..."
+    return f"host: {host_label(base_url)} — paste your key as /model_api=..."

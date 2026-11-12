@@ -314,12 +314,14 @@ The first source that sets a value wins. `ihagent --show-config` and `/config` p
 | :--- | :--- |
 | 1 | Command-line flags (`--model`, `--base-url`, `--max-steps`, `--temperature`, `--approval` / `--yolo`, `--local`, `--ollama`) |
 | 2 | Process environment, except a value that is identical to `~/.hfagent/hf.env` (that one is treated as the file, so it does not hide a project or user env file) |
-| 3 | Project `.env` (`./.env`, or `../.env` when the current directory has none) |
+| 3 | Project `.env` (`./.env`, or `../.env` when the current directory has none). Started from your home directory, `~/.env` is this file and beats `~/.hfagent/.env`. |
 | 4 | `~/.hfagent/.env` |
 | 5 | `~/.hfagent/hf.env` (also what `scripts/setup-huggingface.sh` writes) |
 | 6 | Built-in defaults |
 
 `/url` writes `HF_BASE_URL` to `~/.hfagent/.env` and, when the project `.env` already has that key, updates the project line too. `/model`, `/cloud`, `/local`, `/claude`, and `/model_api=` write the project `.env`.
+
+`/reload` reads this stack again and points the running session at the new base URL, model, and API key. The conversation stays. A variable exported in the shell before launch still wins, as it would if you quit and started again. Values IHAgent itself put in the environment — the first load, or `/url`, `/model_api`, `/cloud`, `/local`, and `/claude` — do not hide a later edit to the file. `/approval`, and a host the session switched to because the primary was unreachable, live only in the session; `/reload` replaces them from the files. Command-line flags from this launch still win.
 
 | Variable | Default | Meaning |
 | :--- | :--- | :--- |
@@ -410,7 +412,7 @@ export HFAGENT_FALLBACK_MODEL='<fallback-model>'
 ihagent
 ```
 
-`/url https://<tunnel-host>` normalises the URL, `GET`s `/v1/models` with the current key (8 second timeout), and on success switches the live client. The URL is written to `~/.hfagent/.env`. If the project `.env` already sets `HF_BASE_URL`, that line is updated too, because the project file would otherwise win on the next launch.
+`/url https://<tunnel-host>` normalises the URL, `GET`s `/v1/models` with the current key (8 second timeout), and on success switches the live client. The URL is written to `~/.hfagent/.env`. If the project `.env` already sets `HF_BASE_URL`, that line is updated too, because the project file would otherwise win on the next launch. After you edit an env file while IHAgent is running, `/reload` picks up the new host, model, and key. The next turn uses them. The chat is kept.
 
 Set `HFAGENT_API_KEY` for a tunnel. If it is unset and `HF_TOKEN` is present, that Hugging Face token is what a custom host receives.
 
@@ -952,7 +954,7 @@ export HFAGENT_FALLBACK_MODEL='<fallback-model>'
 ihagent --show-config
 ```
 
-5. Or switch a running session with `/url https://<tunnel-host>` after the key is set. `/config` shows the masked key and which file won.
+5. Or switch a running session with `/url https://<tunnel-host>` after the key is set. `/config` shows the masked key and which file won. Edit the env file instead, then `/reload`, and the next turn uses the new host, model, and key without quitting.
 6. When the notebook stops, the client reports DNS, timeout, tunnel (Cloudflare 530 / connect error), or gateway (HTTP 502/503/504). With `HFAGENT_FALLBACK_BASE_URL` set, the session moves to the fallback. A 401 or 403 stays on the primary so a bad token is not hidden by the fallback. `/primary` returns once the notebook answers again.
 7. Match `HFAGENT_CONTEXT_TOKENS` to the model you loaded. A 64K default is too large for a smaller window and too small for a larger one.
 
@@ -975,6 +977,7 @@ A dedicated Hugging Face GPU endpoint is a different host. `scripts/setup-huggin
 | `/url <base_url>` | `GET /v1/models`, then switch and save. |
 | `/primary` | Probe the original host and switch back, unless that probe is a connection failure. |
 | `/config` | Effective settings and the source of each. |
+| `/reload` | Re-read env files and point this session at the new host, model, and API key. Keeps the conversation. |
 | `/audit [path]` | Read-only repo health check. Same report as `ihagent --audit`. |
 | `/test [scaffold] [path]` | Detect and run tests, or the smoke check. `scaffold` writes a minimal smoke test if it is missing. |
 | `/output` | Print the last full `run_command`, `ssh_run`, or `browser_read` result. |
